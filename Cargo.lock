@@ -11658,6 +11658,7 @@ version = "0.1.41"
 dependencies = [
  "dunce",
  "git",
+ "git2",
  "tempfile",
  "thiserror 2.0.18",
  "tokio",

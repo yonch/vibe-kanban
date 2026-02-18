@@ -1330,7 +1330,7 @@ impl GitService {
         Ok(())
     }
 
-    pub(crate) fn find_branch<'a>(
+    pub fn find_branch<'a>(
         repo: &'a Repository,
         branch_name: &str,
     ) -> Result<git2::Branch<'a>, GitServiceError> {
@@ -1495,7 +1495,7 @@ impl GitService {
     }
 
     /// Fetch from remote repository using native git authentication
-    fn fetch_branch_from_remote(
+    pub fn fetch_branch_from_remote(
         &self,
         repo: &Repository,
         branch: &Reference,

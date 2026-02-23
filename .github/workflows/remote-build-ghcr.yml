@@ -16,11 +16,11 @@ on:
 
 env:
   REGISTRY: ghcr.io
-  IMAGE_NAME: ${{ github.repository_owner }}/vibe-kanban-remote
+  IMAGE_NAME: yonch/vibe-kanban-remote
 
 jobs:
   build-and-push:
-    runs-on: blacksmith-16vcpu-ubuntu-2404
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       packages: write

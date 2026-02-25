@@ -172,22 +172,32 @@ async fn handle_normalized_logs_ws(
     }
 
     let op_count = all_ops.len();
-    let payload_bytes = if !all_ops.is_empty() {
+    let (raw_bytes, sent_bytes) = if !all_ops.is_empty() {
         let json = serde_json::json!({ "JsonPatch": all_ops }).to_string();
-        let len = json.len();
-        let _ = sender.send(Message::Text(json.into())).await;
-        len
+        let raw_len = json.len();
+
+        // Gzip compress and send as binary frame; client detects binary and decompresses.
+        use flate2::{Compression, write::GzEncoder};
+        use std::io::Write;
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(json.as_bytes())?;
+        let compressed = encoder.finish()?;
+        let compressed_len = compressed.len();
+
+        let _ = sender.send(Message::Binary(compressed.into())).await;
+        (raw_len, compressed_len)
     } else {
-        0
+        (0, 0)
     };
     let _ = sender
         .send(LogMsg::Finished.to_ws_message_unchecked())
         .await;
 
     tracing::info!(
-        "handle_normalized_logs_ws: sent {} ops ({} bytes, batched) in {:?}",
+        "handle_normalized_logs_ws: sent {} ops ({} -> {} bytes gzip, batched) in {:?}",
         op_count,
-        payload_bytes,
+        raw_bytes,
+        sent_bytes,
         t0.elapsed()
     );
     Ok(())

@@ -78,31 +78,45 @@ export function streamJsonPatchEntries<E = unknown>(
     notify();
   };
 
+  const processMsg = (msg: Record<string, unknown>) => {
+    // Handle JsonPatch messages (from LogMsg::to_ws_message)
+    if (msg.JsonPatch) {
+      const raw = msg.JsonPatch as Operation[];
+
+      // Fast path: if all ops are simple appends (/entries/N add), push
+      // directly instead of going through rfc6902.
+      if (tryFastAppend(snapshot.entries, raw)) {
+        scheduleNotify();
+      } else {
+        const ops = dedupeOps(raw);
+        applyUpsertPatch(snapshot, ops);
+        scheduleNotify();
+      }
+    }
+
+    // Handle Finished messages
+    if (msg.finished !== undefined) {
+      flushNotify();
+      opts.onFinished?.(snapshot.entries);
+      ws.close();
+    }
+  };
+
   const handleMessage = (event: MessageEvent) => {
     try {
-      const msg = JSON.parse(event.data);
-
-      // Handle JsonPatch messages (from LogMsg::to_ws_message)
-      if (msg.JsonPatch) {
-        const raw = msg.JsonPatch as Operation[];
-
-        // Fast path: if all ops are simple appends (/entries/N add), push
-        // directly instead of going through rfc6902.
-        if (tryFastAppend(snapshot.entries, raw)) {
-          scheduleNotify();
-        } else {
-          const ops = dedupeOps(raw);
-          applyUpsertPatch(snapshot, ops);
-          scheduleNotify();
-        }
+      // Binary frames are gzip-compressed JSON; decompress first
+      if (event.data instanceof Blob) {
+        const blob = event.data;
+        const ds = new DecompressionStream('gzip');
+        const decompressed = blob.stream().pipeThrough(ds);
+        new Response(decompressed)
+          .json()
+          .then((msg: Record<string, unknown>) => processMsg(msg))
+          .catch((err: unknown) => opts.onError?.(err));
+        return;
       }
 
-      // Handle Finished messages
-      if (msg.finished !== undefined) {
-        flushNotify();
-        opts.onFinished?.(snapshot.entries);
-        ws.close();
-      }
+      processMsg(JSON.parse(event.data));
     } catch (err) {
       opts.onError?.(err);
     }

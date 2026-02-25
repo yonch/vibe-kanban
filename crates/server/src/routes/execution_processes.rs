@@ -172,17 +172,22 @@ async fn handle_normalized_logs_ws(
     }
 
     let op_count = all_ops.len();
-    if !all_ops.is_empty() {
+    let payload_bytes = if !all_ops.is_empty() {
         let json = serde_json::json!({ "JsonPatch": all_ops }).to_string();
+        let len = json.len();
         let _ = sender.send(Message::Text(json.into())).await;
-    }
+        len
+    } else {
+        0
+    };
     let _ = sender
         .send(LogMsg::Finished.to_ws_message_unchecked())
         .await;
 
     tracing::info!(
-        "handle_normalized_logs_ws: sent {} ops (batched) in {:?}",
+        "handle_normalized_logs_ws: sent {} ops ({} bytes, batched) in {:?}",
         op_count,
+        payload_bytes,
         t0.elapsed()
     );
     Ok(())

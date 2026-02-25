@@ -42,16 +42,16 @@ fi
 echo "🔍 Detected platform: $PLATFORM"
 echo "🔧 Using target directory: $CARGO_TARGET_DIR"
 
-# Set API base URL for remote features
-export VK_SHARED_API_BASE="https://api.vibekanban.com"
-export VITE_VK_SHARED_API_BASE="https://api.vibekanban.com"
+# Set API base URL for remote features (allow override via environment)
+export VK_SHARED_API_BASE="${VK_SHARED_API_BASE:-https://api.vibekanban.com}"
+export VITE_VK_SHARED_API_BASE="${VITE_VK_SHARED_API_BASE:-${VK_SHARED_API_BASE}}"
 
 echo "🧹 Cleaning previous builds..."
 rm -rf npx-cli/dist
 mkdir -p npx-cli/dist/$PLATFORM
 
 echo "🔨 Building web app..."
-(cd packages/local-web && npm run build)
+(cd packages/local-web && pnpm run build)
 
 echo "🔨 Building Rust binaries..."
 cargo build --release --manifest-path Cargo.toml

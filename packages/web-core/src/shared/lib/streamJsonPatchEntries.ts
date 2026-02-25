@@ -60,6 +60,24 @@ export function streamJsonPatchEntries<E = unknown>(
     }
   };
 
+  let notifyTimer: ReturnType<typeof setTimeout> | null = null;
+  const scheduleNotify = () => {
+    if (!notifyTimer) {
+      notifyTimer = setTimeout(() => {
+        notifyTimer = null;
+        notify();
+      }, 50);
+    }
+  };
+
+  const flushNotify = () => {
+    if (notifyTimer) {
+      clearTimeout(notifyTimer);
+      notifyTimer = null;
+    }
+    notify();
+  };
+
   const handleMessage = (event: MessageEvent) => {
     try {
       const msg = JSON.parse(event.data);
@@ -69,16 +87,13 @@ export function streamJsonPatchEntries<E = unknown>(
         const raw = msg.JsonPatch as Operation[];
         const ops = dedupeOps(raw);
 
-        // Apply to a working copy (applyPatch mutates)
-        const next = structuredClone(snapshot);
-        applyUpsertPatch(next, ops);
-
-        snapshot = next;
-        notify();
+        applyUpsertPatch(snapshot, ops);
+        scheduleNotify();
       }
 
       // Handle Finished messages
       if (msg.finished !== undefined) {
+        flushNotify();
         opts.onFinished?.(snapshot.entries);
         ws.close();
       }
@@ -120,6 +135,10 @@ export function streamJsonPatchEntries<E = unknown>(
       return () => subscribers.delete(cb);
     },
     close(): void {
+      if (notifyTimer) {
+        clearTimeout(notifyTimer);
+        notifyTimer = null;
+      }
       ws.close();
       subscribers.clear();
       connected = false;

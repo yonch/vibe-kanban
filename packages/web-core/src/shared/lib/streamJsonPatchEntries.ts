@@ -85,10 +85,16 @@ export function streamJsonPatchEntries<E = unknown>(
       // Handle JsonPatch messages (from LogMsg::to_ws_message)
       if (msg.JsonPatch) {
         const raw = msg.JsonPatch as Operation[];
-        const ops = dedupeOps(raw);
 
-        applyUpsertPatch(snapshot, ops);
-        scheduleNotify();
+        // Fast path: if all ops are simple appends (/entries/N add), push
+        // directly instead of going through rfc6902.
+        if (tryFastAppend(snapshot.entries, raw)) {
+          scheduleNotify();
+        } else {
+          const ops = dedupeOps(raw);
+          applyUpsertPatch(snapshot, ops);
+          scheduleNotify();
+        }
       }
 
       // Handle Finished messages
@@ -144,6 +150,24 @@ export function streamJsonPatchEntries<E = unknown>(
       connected = false;
     },
   };
+}
+
+const ENTRIES_ADD_RE = /^\/entries\/\d+$/;
+
+/**
+ * Fast-path for the common case where every op in a message is an "add" to
+ * /entries/<index>.  Instead of running through rfc6902 (which parses JSON
+ * pointers, walks the object graph, etc.) we just push the values directly.
+ * Returns true if the fast path was taken.
+ */
+function tryFastAppend<E>(entries: E[], ops: Operation[]): boolean {
+  for (const op of ops) {
+    if (op.op !== 'add' || !ENTRIES_ADD_RE.test(op.path)) return false;
+  }
+  for (const op of ops) {
+    if (op.op === 'add') entries.push(op.value as E);
+  }
+  return true;
 }
 
 /**

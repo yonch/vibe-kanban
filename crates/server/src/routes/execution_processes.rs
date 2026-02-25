@@ -147,12 +147,15 @@ async fn handle_normalized_logs_ws(
     socket: WebSocket,
     stream: impl futures_util::Stream<Item = anyhow::Result<LogMsg>> + Unpin + Send + 'static,
 ) -> anyhow::Result<()> {
+    let t0 = std::time::Instant::now();
+    let mut count: u64 = 0;
     let mut stream = stream.map_ok(|msg| msg.to_ws_message_unchecked());
     let (mut sender, mut receiver) = socket.split();
     tokio::spawn(async move { while let Some(Ok(_)) = receiver.next().await {} });
     while let Some(item) = stream.next().await {
         match item {
             Ok(msg) => {
+                count += 1;
                 if sender.send(msg).await.is_err() {
                     break;
                 }
@@ -163,6 +166,11 @@ async fn handle_normalized_logs_ws(
             }
         }
     }
+    tracing::info!(
+        "handle_normalized_logs_ws: sent {} messages in {:?}",
+        count,
+        t0.elapsed()
+    );
     Ok(())
 }
 

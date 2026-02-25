@@ -168,15 +168,29 @@ pub async fn migrate_execution_logs_to_files() -> Result<()> {
     };
 
     ExecutionProcessLogs::delete_all(&pool).await?;
-    sqlx::query("VACUUM").execute(&pool).await?;
+
+    // Close the pool before VACUUM — SQLite VACUUM requires an exclusive lock
+    // on the database, which fails if other pool connections are open.
+    pool.close().await;
+
+    {
+        use sqlx::Connection;
+        let database_url = format!(
+            "sqlite://{}",
+            utils::assets::asset_dir()
+                .join("db.v2.sqlite")
+                .to_string_lossy()
+        );
+        let mut conn =
+            sqlx::sqlite::SqliteConnection::connect(&database_url).await?;
+        sqlx::query("VACUUM").execute(&mut conn).await?;
+    }
 
     if let Some(pb) = vacuum_pb {
         pb.finish_and_clear();
     }
 
     let _ = writeln!(std::io::stderr(), "Database migration complete.");
-
-    pool.close().await;
 
     Ok(())
 }

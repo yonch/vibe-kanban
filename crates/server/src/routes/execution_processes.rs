@@ -3,7 +3,7 @@ use axum::{
     Extension, Router,
     extract::{
         Path, Query, State,
-        ws::{WebSocket, WebSocketUpgrade},
+        ws::{Message, WebSocket, WebSocketUpgrade},
     },
     middleware::from_fn_with_state,
     response::{IntoResponse, Json as ResponseJson},
@@ -148,27 +148,41 @@ async fn handle_normalized_logs_ws(
     stream: impl futures_util::Stream<Item = anyhow::Result<LogMsg>> + Unpin + Send + 'static,
 ) -> anyhow::Result<()> {
     let t0 = std::time::Instant::now();
-    let mut count: u64 = 0;
-    let mut stream = stream.map_ok(|msg| msg.to_ws_message_unchecked());
     let (mut sender, mut receiver) = socket.split();
     tokio::spawn(async move { while let Some(Ok(_)) = receiver.next().await {} });
+
+    // Collect all JsonPatch ops, then send as a single WebSocket frame to avoid
+    // per-message network round-trip overhead (1786 frames → 1 frame).
+    let mut all_ops: Vec<serde_json::Value> = Vec::new();
+    let mut stream = std::pin::pin!(stream);
     while let Some(item) = stream.next().await {
         match item {
-            Ok(msg) => {
-                count += 1;
-                if sender.send(msg).await.is_err() {
-                    break;
+            Ok(LogMsg::JsonPatch(patch)) => {
+                if let Ok(serde_json::Value::Array(ops)) = serde_json::to_value(&patch) {
+                    all_ops.extend(ops);
                 }
             }
+            Ok(LogMsg::Finished) => break,
+            Ok(_) => continue,
             Err(e) => {
                 tracing::error!("stream error: {}", e);
                 break;
             }
         }
     }
+
+    let op_count = all_ops.len();
+    if !all_ops.is_empty() {
+        let json = serde_json::json!({ "JsonPatch": all_ops }).to_string();
+        let _ = sender.send(Message::Text(json.into())).await;
+    }
+    let _ = sender
+        .send(LogMsg::Finished.to_ws_message_unchecked())
+        .await;
+
     tracing::info!(
-        "handle_normalized_logs_ws: sent {} messages in {:?}",
-        count,
+        "handle_normalized_logs_ws: sent {} ops (batched) in {:?}",
+        op_count,
         t0.elapsed()
     );
     Ok(())

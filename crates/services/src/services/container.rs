@@ -818,10 +818,8 @@ pub trait ContainerService {
                     .boxed(),
             )
         } else {
-            let t0 = std::time::Instant::now();
             let raw_messages =
                 execution_process::load_raw_log_messages(&self.db().pool, *id).await?;
-            let load_dur = t0.elapsed();
 
             // Create temporary store and populate
             // Include JsonPatch messages (already normalized) and Stdout/Stderr (need normalization)
@@ -948,13 +946,6 @@ pub trait ContainerService {
                     return None;
                 }
             }
-            tracing::info!(
-                "stream_normalized_logs: exec {} — load_raw={:?}, total_setup={:?}",
-                id,
-                load_dur,
-                t0.elapsed(),
-            );
-
             Some(
                 temp_store
                     .history_plus_stream()

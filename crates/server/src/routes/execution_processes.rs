@@ -147,12 +147,12 @@ async fn handle_normalized_logs_ws(
     socket: WebSocket,
     stream: impl futures_util::Stream<Item = anyhow::Result<LogMsg>> + Unpin + Send + 'static,
 ) -> anyhow::Result<()> {
-    let t0 = std::time::Instant::now();
     let (mut sender, mut receiver) = socket.split();
     tokio::spawn(async move { while let Some(Ok(_)) = receiver.next().await {} });
 
-    // Collect all JsonPatch ops, then send as a single WebSocket frame to avoid
-    // per-message network round-trip overhead (1786 frames → 1 frame).
+    // Collect all JsonPatch ops, then send as a single gzip-compressed binary
+    // WebSocket frame. This avoids per-message network overhead and reduces
+    // transfer size ~10-20x for large conversations.
     let mut all_ops: Vec<serde_json::Value> = Vec::new();
     let mut stream = std::pin::pin!(stream);
     while let Some(item) = stream.next().await {
@@ -171,35 +171,21 @@ async fn handle_normalized_logs_ws(
         }
     }
 
-    let op_count = all_ops.len();
-    let (raw_bytes, sent_bytes) = if !all_ops.is_empty() {
-        let json = serde_json::json!({ "JsonPatch": all_ops }).to_string();
-        let raw_len = json.len();
-
-        // Gzip compress and send as binary frame; client detects binary and decompresses.
-        use flate2::{Compression, write::GzEncoder};
+    if !all_ops.is_empty() {
         use std::io::Write;
+
+        use flate2::{Compression, write::GzEncoder};
+
+        let json = serde_json::json!({ "JsonPatch": all_ops }).to_string();
         let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
         encoder.write_all(json.as_bytes())?;
         let compressed = encoder.finish()?;
-        let compressed_len = compressed.len();
-
         let _ = sender.send(Message::Binary(compressed.into())).await;
-        (raw_len, compressed_len)
-    } else {
-        (0, 0)
-    };
+    }
     let _ = sender
         .send(LogMsg::Finished.to_ws_message_unchecked())
         .await;
 
-    tracing::info!(
-        "handle_normalized_logs_ws: sent {} ops ({} -> {} bytes gzip, batched) in {:?}",
-        op_count,
-        raw_bytes,
-        sent_bytes,
-        t0.elapsed()
-    );
     Ok(())
 }
 

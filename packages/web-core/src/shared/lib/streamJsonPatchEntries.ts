@@ -81,24 +81,29 @@ export function streamJsonPatchEntries<E = unknown>(
     }
   };
 
+  // Chain message processing so async gzip decompression completes
+  // before subsequent (e.g. Finished) messages are handled.
+  let msgChain: Promise<void> = Promise.resolve();
+
   const handleMessage = (event: MessageEvent) => {
-    try {
+    msgChain = msgChain.then(() => {
       // Binary frames are gzip-compressed JSON; decompress first
       if (event.data instanceof Blob) {
         const blob = event.data;
         const ds = new DecompressionStream('gzip');
         const decompressed = blob.stream().pipeThrough(ds);
-        new Response(decompressed)
+        return new Response(decompressed)
           .json()
           .then((msg: Record<string, unknown>) => processMsg(msg))
           .catch((err: unknown) => opts.onError?.(err));
-        return;
       }
 
-      processMsg(JSON.parse(event.data));
-    } catch (err) {
-      opts.onError?.(err);
-    }
+      try {
+        processMsg(JSON.parse(event.data));
+      } catch (err) {
+        opts.onError?.(err);
+      }
+    });
   };
 
   ws.addEventListener('open', () => {

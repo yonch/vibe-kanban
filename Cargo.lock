@@ -5580,6 +5580,7 @@ dependencies = [
  "dotenv",
  "ed25519-dalek",
  "executors",
+ "flate2",
  "futures",
  "futures-util",
  "git",

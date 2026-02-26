@@ -60,43 +60,22 @@ export function streamJsonPatchEntries<E = unknown>(
     }
   };
 
-  let notifyTimer: ReturnType<typeof setTimeout> | null = null;
-  const scheduleNotify = () => {
-    if (!notifyTimer) {
-      notifyTimer = setTimeout(() => {
-        notifyTimer = null;
-        notify();
-      }, 50);
-    }
-  };
-
-  const flushNotify = () => {
-    if (notifyTimer) {
-      clearTimeout(notifyTimer);
-      notifyTimer = null;
-    }
-    notify();
-  };
-
   const processMsg = (msg: Record<string, unknown>) => {
     // Handle JsonPatch messages (from LogMsg::to_ws_message)
     if (msg.JsonPatch) {
       const raw = msg.JsonPatch as Operation[];
+      const ops = dedupeOps(raw);
 
-      // Fast path: if all ops are simple appends (/entries/N add), push
-      // directly instead of going through rfc6902.
-      if (tryFastAppend(snapshot.entries, raw)) {
-        scheduleNotify();
-      } else {
-        const ops = dedupeOps(raw);
-        applyUpsertPatch(snapshot, ops);
-        scheduleNotify();
-      }
+      // Apply to a working copy (applyPatch mutates)
+      const next = structuredClone(snapshot);
+      applyUpsertPatch(next, ops);
+
+      snapshot = next;
+      notify();
     }
 
     // Handle Finished messages
     if (msg.finished !== undefined) {
-      flushNotify();
       opts.onFinished?.(snapshot.entries);
       ws.close();
     }
@@ -155,33 +134,11 @@ export function streamJsonPatchEntries<E = unknown>(
       return () => subscribers.delete(cb);
     },
     close(): void {
-      if (notifyTimer) {
-        clearTimeout(notifyTimer);
-        notifyTimer = null;
-      }
       ws.close();
       subscribers.clear();
       connected = false;
     },
   };
-}
-
-const ENTRIES_ADD_RE = /^\/entries\/\d+$/;
-
-/**
- * Fast-path for the common case where every op in a message is an "add" to
- * /entries/<index>.  Instead of running through rfc6902 (which parses JSON
- * pointers, walks the object graph, etc.) we just push the values directly.
- * Returns true if the fast path was taken.
- */
-function tryFastAppend<E>(entries: E[], ops: Operation[]): boolean {
-  for (const op of ops) {
-    if (op.op !== 'add' || !ENTRIES_ADD_RE.test(op.path)) return false;
-  }
-  for (const op of ops) {
-    if (op.op === 'add') entries.push(op.value as E);
-  }
-  return true;
 }
 
 /**

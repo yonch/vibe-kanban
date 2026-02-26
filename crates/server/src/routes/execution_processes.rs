@@ -125,14 +125,6 @@ pub async fn stream_normalized_logs_ws(
     State(deployment): State<DeploymentImpl>,
     Path(exec_id): Path<Uuid>,
 ) -> Result<impl IntoResponse, ApiError> {
-    // Check if the process is currently running so we can decide whether to
-    // batch (historic) or stream (live) the messages to the client.
-    let is_running = deployment
-        .container()
-        .get_msg_store_by_id(&exec_id)
-        .await
-        .is_some();
-
     let stream = deployment
         .container()
         .stream_normalized_logs(&exec_id)
@@ -145,29 +137,74 @@ pub async fn stream_normalized_logs_ws(
     let stream = stream.err_into::<anyhow::Error>().into_stream();
 
     Ok(ws.on_upgrade(move |socket| async move {
-        let result = if is_running {
-            handle_normalized_logs_ws_streaming(socket, stream).await
-        } else {
-            handle_normalized_logs_ws_batched(socket, stream).await
-        };
-        if let Err(e) = result {
+        if let Err(e) = handle_normalized_logs_ws(socket, stream).await {
             tracing::warn!("normalized logs WS closed: {}", e);
         }
     }))
 }
 
-/// Stream messages one-by-one for live/running processes so the UI updates in real time.
-async fn handle_normalized_logs_ws_streaming(
+/// Send normalized log patches over a WebSocket.
+///
+/// Uses a two-phase approach:
+/// 1. **Batch phase:** collect patches that arrive within a short timeout window,
+///    gzip-compress them, and send as a single binary frame. This efficiently delivers
+///    the backlog of historic messages.
+/// 2. **Streaming phase:** once the stream goes quiet (no message within the timeout),
+///    switch to forwarding messages individually for real-time live updates.
+async fn handle_normalized_logs_ws(
     socket: WebSocket,
     stream: impl futures_util::Stream<Item = anyhow::Result<LogMsg>> + Unpin + Send + 'static,
 ) -> anyhow::Result<()> {
-    let mut stream = stream.map_ok(|msg| msg.to_ws_message_unchecked());
+    use std::time::Duration;
+
+    const BATCH_TIMEOUT: Duration = Duration::from_millis(50);
+
     let (mut sender, mut receiver) = socket.split();
     tokio::spawn(async move { while let Some(Ok(_)) = receiver.next().await {} });
+
+    let mut stream = std::pin::pin!(stream);
+
+    // Phase 1: Batch — collect patches while messages keep arriving within the timeout.
+    let mut all_ops: Vec<serde_json::Value> = Vec::new();
+    loop {
+        let item = tokio::time::timeout(BATCH_TIMEOUT, stream.next()).await;
+        match item {
+            Ok(Some(Ok(LogMsg::JsonPatch(patch)))) => {
+                if let Ok(serde_json::Value::Array(ops)) = serde_json::to_value(&patch) {
+                    all_ops.extend(ops);
+                }
+            }
+            Ok(Some(Ok(LogMsg::Finished))) => {
+                // Process ended during batch phase — flush and return.
+                flush_batch(&mut sender, &mut all_ops).await?;
+                let _ = sender
+                    .send(LogMsg::Finished.to_ws_message_unchecked())
+                    .await;
+                return Ok(());
+            }
+            Ok(Some(Ok(_))) => continue,
+            Ok(Some(Err(e))) => {
+                tracing::error!("stream error: {}", e);
+                return Ok(());
+            }
+            Ok(None) => {
+                // Stream ended without Finished.
+                flush_batch(&mut sender, &mut all_ops).await?;
+                return Ok(());
+            }
+            Err(_) => {
+                // Timeout — no message within BATCH_TIMEOUT, flush and switch to streaming.
+                flush_batch(&mut sender, &mut all_ops).await?;
+                break;
+            }
+        }
+    }
+
+    // Phase 2: Stream — forward messages individually for real-time updates.
     while let Some(item) = stream.next().await {
         match item {
             Ok(msg) => {
-                if sender.send(msg).await.is_err() {
+                if sender.send(msg.to_ws_message_unchecked()).await.is_err() {
                     break;
                 }
             }
@@ -180,48 +217,25 @@ async fn handle_normalized_logs_ws_streaming(
     Ok(())
 }
 
-/// Batch all patches into a single gzip-compressed binary frame for historic processes.
-/// This avoids per-message network overhead and reduces transfer size ~10-20x.
-async fn handle_normalized_logs_ws_batched(
-    socket: WebSocket,
-    stream: impl futures_util::Stream<Item = anyhow::Result<LogMsg>> + Unpin + Send + 'static,
+/// Gzip-compress accumulated ops and send as a single binary frame, then clear the buffer.
+async fn flush_batch(
+    sender: &mut futures_util::stream::SplitSink<WebSocket, Message>,
+    ops: &mut Vec<serde_json::Value>,
 ) -> anyhow::Result<()> {
-    let (mut sender, mut receiver) = socket.split();
-    tokio::spawn(async move { while let Some(Ok(_)) = receiver.next().await {} });
-
-    let mut all_ops: Vec<serde_json::Value> = Vec::new();
-    let mut stream = std::pin::pin!(stream);
-    while let Some(item) = stream.next().await {
-        match item {
-            Ok(LogMsg::JsonPatch(patch)) => {
-                if let Ok(serde_json::Value::Array(ops)) = serde_json::to_value(&patch) {
-                    all_ops.extend(ops);
-                }
-            }
-            Ok(LogMsg::Finished) => break,
-            Ok(_) => continue,
-            Err(e) => {
-                tracing::error!("stream error: {}", e);
-                break;
-            }
-        }
+    if ops.is_empty() {
+        return Ok(());
     }
 
-    if !all_ops.is_empty() {
-        use std::io::Write;
+    use std::io::Write;
 
-        use flate2::{Compression, write::GzEncoder};
+    use flate2::{Compression, write::GzEncoder};
 
-        let json = serde_json::json!({ "JsonPatch": all_ops }).to_string();
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
-        encoder.write_all(json.as_bytes())?;
-        let compressed = encoder.finish()?;
-        let _ = sender.send(Message::Binary(compressed.into())).await;
-    }
-    let _ = sender
-        .send(LogMsg::Finished.to_ws_message_unchecked())
-        .await;
-
+    let json = serde_json::json!({ "JsonPatch": ops }).to_string();
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+    encoder.write_all(json.as_bytes())?;
+    let compressed = encoder.finish()?;
+    let _ = sender.send(Message::Binary(compressed.into())).await;
+    ops.clear();
     Ok(())
 }
 

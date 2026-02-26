@@ -146,56 +146,57 @@ pub async fn stream_normalized_logs_ws(
 /// Send normalized log patches over a WebSocket.
 ///
 /// Uses a two-phase approach:
-/// 1. **Batch phase:** collect patches that arrive within a short timeout window,
-///    gzip-compress them, and send as a single binary frame. This efficiently delivers
-///    the backlog of historic messages.
-/// 2. **Streaming phase:** once the stream goes quiet (no message within the timeout),
-///    switch to forwarding messages individually for real-time live updates.
+/// 1. **Batch phase:** collect patches into a buffer, flushing as a gzip-compressed
+///    binary frame every 50ms while messages keep arriving. When a 50ms window passes
+///    with an empty buffer, transition to phase 2.
+/// 2. **Streaming phase:** forward messages individually for real-time live updates.
 async fn handle_normalized_logs_ws(
     socket: WebSocket,
     stream: impl futures_util::Stream<Item = anyhow::Result<LogMsg>> + Unpin + Send + 'static,
 ) -> anyhow::Result<()> {
     use std::time::Duration;
 
-    const BATCH_TIMEOUT: Duration = Duration::from_millis(50);
+    const BATCH_INTERVAL: Duration = Duration::from_millis(50);
 
     let (mut sender, mut receiver) = socket.split();
     tokio::spawn(async move { while let Some(Ok(_)) = receiver.next().await {} });
 
     let mut stream = std::pin::pin!(stream);
+    let mut batch: Vec<serde_json::Value> = Vec::new();
 
-    // Phase 1: Batch — collect patches while messages keep arriving within the timeout.
-    let mut all_ops: Vec<serde_json::Value> = Vec::new();
+    // Phase 1: Batch — collect patches, flush every BATCH_INTERVAL.
+    // Transition to streaming when a tick fires with an empty buffer.
     loop {
-        let item = tokio::time::timeout(BATCH_TIMEOUT, stream.next()).await;
-        match item {
-            Ok(Some(Ok(LogMsg::JsonPatch(patch)))) => {
-                if let Ok(serde_json::Value::Array(ops)) = serde_json::to_value(&patch) {
-                    all_ops.extend(ops);
+        tokio::select! {
+            item = stream.next() => {
+                match item {
+                    Some(Ok(LogMsg::JsonPatch(patch))) => {
+                        if let Ok(serde_json::Value::Array(ops)) = serde_json::to_value(&patch) {
+                            batch.extend(ops);
+                        }
+                    }
+                    Some(Ok(LogMsg::Finished)) => {
+                        flush_batch(&mut sender, &mut batch).await?;
+                        let _ = sender.send(LogMsg::Finished.to_ws_message_unchecked()).await;
+                        return Ok(());
+                    }
+                    Some(Ok(_)) => continue,
+                    Some(Err(e)) => {
+                        tracing::error!("stream error: {}", e);
+                        return Ok(());
+                    }
+                    None => {
+                        flush_batch(&mut sender, &mut batch).await?;
+                        return Ok(());
+                    }
                 }
             }
-            Ok(Some(Ok(LogMsg::Finished))) => {
-                // Process ended during batch phase — flush and return.
-                flush_batch(&mut sender, &mut all_ops).await?;
-                let _ = sender
-                    .send(LogMsg::Finished.to_ws_message_unchecked())
-                    .await;
-                return Ok(());
-            }
-            Ok(Some(Ok(_))) => continue,
-            Ok(Some(Err(e))) => {
-                tracing::error!("stream error: {}", e);
-                return Ok(());
-            }
-            Ok(None) => {
-                // Stream ended without Finished.
-                flush_batch(&mut sender, &mut all_ops).await?;
-                return Ok(());
-            }
-            Err(_) => {
-                // Timeout — no message within BATCH_TIMEOUT, flush and switch to streaming.
-                flush_batch(&mut sender, &mut all_ops).await?;
-                break;
+            _ = tokio::time::sleep(BATCH_INTERVAL) => {
+                if batch.is_empty() {
+                    // No messages arrived in this window — history is caught up.
+                    break;
+                }
+                flush_batch(&mut sender, &mut batch).await?;
             }
         }
     }

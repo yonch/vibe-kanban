@@ -1,5 +1,4 @@
 // streamJsonPatchEntries.ts - WebSocket JSON patch streaming utility
-import { produce } from 'immer';
 import type { Operation } from 'rfc6902';
 import { applyUpsertPatch } from '@/shared/lib/jsonPatch';
 import { openLocalApiWebSocket } from '@/shared/lib/localApiTransport';
@@ -35,9 +34,6 @@ interface StreamController<E = unknown> {
  *   {"Finished": ""}
  *
  * Maintains an in-memory { entries: [] } snapshot and returns a controller.
- *
- * Messages are batched per animation frame and applied using immer for
- * structural sharing, avoiding a full deep clone on every message.
  */
 export function streamJsonPatchEntries<E = unknown>(
   url: string,
@@ -53,10 +49,6 @@ export function streamJsonPatchEntries<E = unknown>(
   const subscribers = new Set<(entries: E[]) => void>();
   if (opts.onEntries) subscribers.add(opts.onEntries);
 
-  // --- rAF batching state ---
-  let pendingOps: Operation[] = [];
-  let rafId: number | null = null;
-
   const notify = () => {
     for (const cb of subscribers) {
       try {
@@ -67,44 +59,50 @@ export function streamJsonPatchEntries<E = unknown>(
     }
   };
 
-  const flush = () => {
-    rafId = null;
-    if (pendingOps.length === 0) return;
+  const processMsg = (msg: Record<string, unknown>) => {
+    // Handle JsonPatch messages (from LogMsg::to_ws_message)
+    if (msg.JsonPatch) {
+      const raw = msg.JsonPatch as Operation[];
+      const ops = dedupeOps(raw);
 
-    const ops = dedupeOps(pendingOps);
-    pendingOps = [];
+      // Apply to a working copy (applyPatch mutates)
+      const next = structuredClone(snapshot);
+      applyUpsertPatch(next, ops);
 
-    snapshot = produce(snapshot, (draft) => {
-      applyUpsertPatch(draft, ops);
-    });
-    notify();
+      snapshot = next;
+      notify();
+    }
+
+    // Handle Finished messages
+    if (msg.finished !== undefined) {
+      opts.onFinished?.(snapshot.entries);
+      ws?.close();
+    }
   };
 
+  // Chain message processing so async gzip decompression completes
+  // before subsequent (e.g. Finished) messages are handled.
+  let msgChain: Promise<void> = Promise.resolve();
+
   const handleMessage = (event: MessageEvent) => {
-    try {
-      const msg = JSON.parse(event.data);
-
-      // Handle JsonPatch messages — accumulate ops for next rAF flush
-      if (msg.JsonPatch) {
-        const raw = msg.JsonPatch as Operation[];
-        pendingOps.push(...raw);
-        if (rafId === null) {
-          rafId = requestAnimationFrame(flush);
-        }
+    msgChain = msgChain.then(() => {
+      // Binary frames are gzip-compressed JSON; decompress first
+      if (event.data instanceof Blob) {
+        const blob = event.data;
+        const ds = new DecompressionStream('gzip');
+        const decompressed = blob.stream().pipeThrough(ds);
+        return new Response(decompressed)
+          .json()
+          .then((msg: Record<string, unknown>) => processMsg(msg))
+          .catch((err: unknown) => opts.onError?.(err));
       }
 
-      // Handle Finished messages — flush synchronously before closing
-      if (msg.finished !== undefined) {
-        if (rafId !== null) {
-          cancelAnimationFrame(rafId);
-        }
-        flush();
-        opts.onFinished?.(snapshot.entries);
-        ws?.close();
+      try {
+        processMsg(JSON.parse(event.data));
+      } catch (err) {
+        opts.onError?.(err);
       }
-    } catch (err) {
-      opts.onError?.(err);
-    }
+    });
   };
 
   void (async () => {
@@ -131,10 +129,6 @@ export function streamJsonPatchEntries<E = unknown>(
 
       ws.addEventListener('close', () => {
         connected = false;
-        if (rafId !== null) {
-          cancelAnimationFrame(rafId);
-          rafId = null;
-        }
       });
     } catch (error) {
       if (!closed) {
@@ -161,10 +155,6 @@ export function streamJsonPatchEntries<E = unknown>(
     },
     close(): void {
       closed = true;
-      if (rafId !== null) {
-        cancelAnimationFrame(rafId);
-        rafId = null;
-      }
       ws?.close();
       subscribers.clear();
       connected = false;
@@ -173,7 +163,7 @@ export function streamJsonPatchEntries<E = unknown>(
 }
 
 /**
- * Dedupe multiple ops that touch the same path within a batch.
+ * Dedupe multiple ops that touch the same path within a single event.
  * Last write for a path wins, while preserving the overall left-to-right
  * order of the *kept* final operations.
  *

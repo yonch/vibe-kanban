@@ -163,9 +163,11 @@ async fn handle_normalized_logs_ws(
 
     let mut stream = std::pin::pin!(stream);
     let mut batch: Vec<serde_json::Value> = Vec::new();
+    let mut deadline = tokio::time::Instant::now() + BATCH_INTERVAL;
 
     // Phase 1: Batch — collect patches, flush every BATCH_INTERVAL.
-    // Transition to streaming when a tick fires with an empty buffer.
+    // The deadline is a fixed point in time, reset only after a flush.
+    // Transition to streaming when the deadline fires with an empty buffer.
     loop {
         tokio::select! {
             item = stream.next() => {
@@ -191,12 +193,13 @@ async fn handle_normalized_logs_ws(
                     }
                 }
             }
-            _ = tokio::time::sleep(BATCH_INTERVAL) => {
+            _ = tokio::time::sleep_until(deadline) => {
                 if batch.is_empty() {
                     // No messages arrived in this window — history is caught up.
                     break;
                 }
                 flush_batch(&mut sender, &mut batch).await?;
+                deadline = tokio::time::Instant::now() + BATCH_INTERVAL;
             }
         }
     }

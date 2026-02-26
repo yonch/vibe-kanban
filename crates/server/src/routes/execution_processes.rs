@@ -1,7 +1,10 @@
 use anyhow;
 use axum::{
     Extension, Router,
-    extract::{Path, Query, State, ws::Message},
+    extract::{
+        Path, Query, State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
+    },
     middleware::from_fn_with_state,
     response::{IntoResponse, Json as ResponseJson},
     routing::{get, post},
@@ -155,33 +158,45 @@ async fn handle_normalized_logs_ws(
     mut socket: SignedWebSocket,
     stream: impl futures_util::Stream<Item = anyhow::Result<LogMsg>> + Unpin + Send + 'static,
 ) -> anyhow::Result<()> {
-    let mut stream = stream.map_ok(|msg| msg.to_ws_message_unchecked());
-    loop {
-        tokio::select! {
-            item = stream.next() => {
-                match item {
-                    Some(Ok(msg)) => {
-                        if socket.send(msg).await.is_err() {
-                            break;
-                        }
-                    }
-                    Some(Err(e)) => {
-                        tracing::error!("stream error: {}", e);
-                        break;
-                    }
-                    None => break,
+    let (mut sender, mut receiver) = socket.split();
+    tokio::spawn(async move { while let Some(Ok(_)) = receiver.next().await {} });
+
+    // Collect all JsonPatch ops, then send as a single gzip-compressed binary
+    // WebSocket frame. This avoids per-message network overhead and reduces
+    // transfer size ~10-20x for large conversations.
+    let mut all_ops: Vec<serde_json::Value> = Vec::new();
+    let mut stream = std::pin::pin!(stream);
+    while let Some(item) = stream.next().await {
+        match item {
+            Ok(LogMsg::JsonPatch(patch)) => {
+                if let Ok(serde_json::Value::Array(ops)) = serde_json::to_value(&patch) {
+                    all_ops.extend(ops);
                 }
             }
-            inbound = socket.recv() => {
-                match inbound {
-                    Ok(Some(Message::Close(_))) => break,
-                    Ok(Some(_)) => {}
-                    Ok(None) => break,
-                    Err(_) => break,
-                }
+            Ok(LogMsg::Finished) => break,
+            Ok(_) => continue,
+            Err(e) => {
+                tracing::error!("stream error: {}", e);
+                break;
             }
         }
     }
+
+    if !all_ops.is_empty() {
+        use std::io::Write;
+
+        use flate2::{Compression, write::GzEncoder};
+
+        let json = serde_json::json!({ "JsonPatch": all_ops }).to_string();
+        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+        encoder.write_all(json.as_bytes())?;
+        let compressed = encoder.finish()?;
+        let _ = sender.send(Message::Binary(compressed.into())).await;
+    }
+    let _ = sender
+        .send(LogMsg::Finished.to_ws_message_unchecked())
+        .await;
+
     Ok(())
 }
 

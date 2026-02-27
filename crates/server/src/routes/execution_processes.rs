@@ -1,10 +1,7 @@
 use anyhow;
 use axum::{
     Extension, Router,
-    extract::{
-        Path, Query, State,
-        ws::{Message, WebSocket, WebSocketUpgrade},
-    },
+    extract::{Path, Query, State, ws::Message},
     middleware::from_fn_with_state,
     response::{IntoResponse, Json as ResponseJson},
     routing::{get, post},
@@ -154,49 +151,111 @@ pub async fn stream_normalized_logs_ws(
     }))
 }
 
+/// Send normalized log patches over a WebSocket.
+///
+/// Uses a two-phase approach:
+/// 1. **Batch phase:** collect patches into a buffer, flushing as a gzip-compressed
+///    binary frame every 50ms while messages keep arriving. When a 50ms window passes
+///    with an empty buffer, transition to phase 2.
+/// 2. **Streaming phase:** forward messages individually for real-time live updates.
 async fn handle_normalized_logs_ws(
     mut socket: SignedWebSocket,
     stream: impl futures_util::Stream<Item = anyhow::Result<LogMsg>> + Unpin + Send + 'static,
 ) -> anyhow::Result<()> {
-    let (mut sender, mut receiver) = socket.split();
-    tokio::spawn(async move { while let Some(Ok(_)) = receiver.next().await {} });
+    use std::time::Duration;
 
-    // Collect all JsonPatch ops, then send as a single gzip-compressed binary
-    // WebSocket frame. This avoids per-message network overhead and reduces
-    // transfer size ~10-20x for large conversations.
-    let mut all_ops: Vec<serde_json::Value> = Vec::new();
+    const BATCH_INTERVAL: Duration = Duration::from_millis(50);
+
     let mut stream = std::pin::pin!(stream);
-    while let Some(item) = stream.next().await {
-        match item {
-            Ok(LogMsg::JsonPatch(patch)) => {
-                if let Ok(serde_json::Value::Array(ops)) = serde_json::to_value(&patch) {
-                    all_ops.extend(ops);
+    let mut batch: Vec<serde_json::Value> = Vec::new();
+    let mut deadline = tokio::time::Instant::now() + BATCH_INTERVAL;
+
+    // Phase 1: Batch — collect patches, flush every BATCH_INTERVAL.
+    // The deadline is a fixed point in time, reset only after a flush.
+    // Transition to streaming when the deadline fires with an empty buffer.
+    loop {
+        tokio::select! {
+            item = stream.next() => {
+                match item {
+                    Some(Ok(LogMsg::JsonPatch(patch))) => {
+                        if let Ok(serde_json::Value::Array(ops)) = serde_json::to_value(&patch) {
+                            batch.extend(ops);
+                        }
+                    }
+                    Some(Ok(LogMsg::Finished)) => {
+                        flush_batch(&mut socket, &mut batch).await?;
+                        let _ = socket.send(LogMsg::Finished.to_ws_message_unchecked()).await;
+                        return Ok(());
+                    }
+                    Some(Ok(_)) => continue,
+                    Some(Err(e)) => {
+                        tracing::error!("stream error: {}", e);
+                        return Ok(());
+                    }
+                    None => {
+                        flush_batch(&mut socket, &mut batch).await?;
+                        return Ok(());
+                    }
                 }
             }
-            Ok(LogMsg::Finished) => break,
-            Ok(_) => continue,
-            Err(e) => {
-                tracing::error!("stream error: {}", e);
-                break;
+            _ = tokio::time::sleep_until(deadline) => {
+                if batch.is_empty() {
+                    // No messages arrived in this window — history is caught up.
+                    break;
+                }
+                flush_batch(&mut socket, &mut batch).await?;
+                deadline = tokio::time::Instant::now() + BATCH_INTERVAL;
             }
         }
     }
 
-    if !all_ops.is_empty() {
-        use std::io::Write;
-
-        use flate2::{Compression, write::GzEncoder};
-
-        let json = serde_json::json!({ "JsonPatch": all_ops }).to_string();
-        let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
-        encoder.write_all(json.as_bytes())?;
-        let compressed = encoder.finish()?;
-        let _ = sender.send(Message::Binary(compressed.into())).await;
+    // Phase 2: Stream — forward messages individually for real-time updates.
+    loop {
+        tokio::select! {
+            item = stream.next() => {
+                match item {
+                    Some(Ok(msg)) => {
+                        socket.send(msg.to_ws_message_unchecked()).await?;
+                    }
+                    Some(Err(e)) => {
+                        tracing::error!("stream error: {}", e);
+                        break;
+                    }
+                    None => break,
+                }
+            }
+            inbound = socket.recv() => {
+                match inbound {
+                    Ok(Some(Message::Close(_))) => break,
+                    Ok(Some(_)) => {}
+                    Ok(None) => break,
+                    Err(_) => break,
+                }
+            }
+        }
     }
-    let _ = sender
-        .send(LogMsg::Finished.to_ws_message_unchecked())
-        .await;
+    Ok(())
+}
 
+/// Gzip-compress accumulated ops and send as a single binary frame, then clear the buffer.
+async fn flush_batch(
+    socket: &mut SignedWebSocket,
+    ops: &mut Vec<serde_json::Value>,
+) -> anyhow::Result<()> {
+    if ops.is_empty() {
+        return Ok(());
+    }
+
+    use std::io::Write;
+
+    use flate2::{Compression, write::GzEncoder};
+
+    let json = serde_json::json!({ "JsonPatch": ops }).to_string();
+    let mut encoder = GzEncoder::new(Vec::new(), Compression::fast());
+    encoder.write_all(json.as_bytes())?;
+    let compressed = encoder.finish()?;
+    socket.send(Message::Binary(compressed.into())).await?;
+    ops.clear();
     Ok(())
 }
 

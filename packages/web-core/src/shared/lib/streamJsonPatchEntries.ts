@@ -76,7 +76,7 @@ export function streamJsonPatchEntries<E = unknown>(
     // Handle Finished messages
     if (msg.finished !== undefined) {
       opts.onFinished?.(snapshot.entries);
-      ws.close();
+      ws?.close();
     }
   };
 

@@ -142,6 +142,7 @@
     "pin": "Pin",
     "unpin": "Unpin",
     "archive": "Archive",
+    "unarchive": "Unarchive",
     "more": "More actions",
     "rename": {
       "title": "Rename Workspace",

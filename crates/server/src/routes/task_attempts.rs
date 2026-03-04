@@ -20,6 +20,7 @@ use axum::{
     response::{IntoResponse, Json as ResponseJson},
     routing::{get, post, put},
 };
+use chrono::{DateTime, Utc};
 use db::models::{
     coding_agent_turn::CodingAgentTurn,
     execution_process::{ExecutionProcess, ExecutionProcessRunReason, ExecutionProcessStatus},
@@ -148,6 +149,87 @@ pub async fn get_task_attempt(
     Extension(workspace): Extension<Workspace>,
 ) -> Result<ResponseJson<ApiResponse<Workspace>>, ApiError> {
     Ok(ResponseJson(ApiResponse::success(workspace)))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct WaitForWorkspaceRequest {
+    pub workspace_ids: Vec<Uuid>,
+    #[serde(default = "default_timeout_seconds")]
+    pub timeout_seconds: u64,
+}
+
+fn default_timeout_seconds() -> u64 {
+    1800
+}
+
+#[derive(Debug, Serialize)]
+pub struct WaitForWorkspaceResponse {
+    pub completed_workspace_id: Uuid,
+    pub status: String,
+    pub branch: String,
+    pub name: Option<String>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+/// Long-poll endpoint: holds the connection open until any of the requested workspaces
+/// reaches a terminal state (not running) or the timeout elapses.
+pub async fn wait_for_workspace(
+    State(deployment): State<DeploymentImpl>,
+    Json(request): Json<WaitForWorkspaceRequest>,
+) -> Result<ResponseJson<ApiResponse<WaitForWorkspaceResponse>>, ApiError> {
+    use std::time::Duration;
+
+    let pool = &deployment.db().pool;
+    let deadline =
+        tokio::time::Instant::now() + Duration::from_secs(request.timeout_seconds.min(3600));
+    let poll_interval = Duration::from_millis(500);
+
+    loop {
+        for id in &request.workspace_ids {
+            if let Some(ws) = Workspace::find_by_id_with_status(pool, *id).await? {
+                if !ws.is_running {
+                    let completed_at = ExecutionProcess::latest_completed_at_for_workspace(
+                        pool,
+                        ws.workspace.id,
+                    )
+                    .await?;
+
+                    let status = if ws.is_errored { "failed" } else { "completed" };
+
+                    return Ok(ResponseJson(ApiResponse::success(
+                        WaitForWorkspaceResponse {
+                            completed_workspace_id: ws.workspace.id,
+                            status: status.to_string(),
+                            branch: ws.workspace.branch.clone(),
+                            name: ws.workspace.name.clone(),
+                            completed_at,
+                        },
+                    )));
+                }
+            }
+        }
+
+        if tokio::time::Instant::now() + poll_interval > deadline {
+            // Timeout — return status for the first workspace.
+            let first_id = request.workspace_ids[0];
+            let branch = Workspace::find_by_id(pool, first_id)
+                .await?
+                .map(|w| w.branch.clone())
+                .unwrap_or_default();
+
+            return Ok(ResponseJson(ApiResponse::success(
+                WaitForWorkspaceResponse {
+                    completed_workspace_id: first_id,
+                    status: "timeout".to_string(),
+                    branch,
+                    name: None,
+                    completed_at: None,
+                },
+            )));
+        }
+
+        tokio::time::sleep(poll_interval).await;
+    }
 }
 
 pub async fn update_workspace(
@@ -2091,6 +2173,7 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
         .route("/from-pr", post(pr::create_workspace_from_pr))
         .route("/stream/ws", get(stream_workspaces_ws))
         .route("/summary", post(workspace_summary::get_workspace_summaries))
+        .route("/wait", post(wait_for_workspace))
         .nest("/{id}", task_attempt_id_router)
         .nest("/{id}/images", images::router(deployment));
 

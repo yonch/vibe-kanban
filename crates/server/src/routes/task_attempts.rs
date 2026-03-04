@@ -20,6 +20,7 @@ use axum::{
     response::{IntoResponse, Json as ResponseJson},
     routing::{get, post, put},
 };
+use chrono::{DateTime, Utc};
 use db::models::{
     coding_agent_turn::CodingAgentTurn,
     execution_process::{ExecutionProcess, ExecutionProcessRunReason, ExecutionProcessStatus},
@@ -134,6 +135,50 @@ pub async fn get_task_attempt(
     Extension(workspace): Extension<Workspace>,
 ) -> Result<ResponseJson<ApiResponse<Workspace>>, ApiError> {
     Ok(ResponseJson(ApiResponse::success(workspace)))
+}
+
+#[derive(Debug, Deserialize)]
+pub struct GetWorkspaceStatusesRequest {
+    pub workspace_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct WorkspaceStatusEntry {
+    pub workspace_id: Uuid,
+    pub branch: String,
+    pub is_running: bool,
+    pub is_errored: bool,
+    pub name: Option<String>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+pub async fn get_workspace_statuses(
+    State(deployment): State<DeploymentImpl>,
+    Json(request): Json<GetWorkspaceStatusesRequest>,
+) -> Result<ResponseJson<ApiResponse<Vec<WorkspaceStatusEntry>>>, ApiError> {
+    let pool = &deployment.db().pool;
+    let mut entries = Vec::with_capacity(request.workspace_ids.len());
+
+    for id in &request.workspace_ids {
+        if let Some(ws) = Workspace::find_by_id_with_status(pool, *id).await? {
+            let completed_at = if !ws.is_running {
+                ExecutionProcess::latest_completed_at_for_workspace(pool, ws.workspace.id).await?
+            } else {
+                None
+            };
+
+            entries.push(WorkspaceStatusEntry {
+                workspace_id: ws.workspace.id,
+                branch: ws.workspace.branch.clone(),
+                is_running: ws.is_running,
+                is_errored: ws.is_errored,
+                name: ws.workspace.name.clone(),
+                completed_at,
+            });
+        }
+    }
+
+    Ok(ResponseJson(ApiResponse::success(entries)))
 }
 
 pub async fn update_workspace(
@@ -2110,6 +2155,7 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
         .route("/from-pr", post(pr::create_workspace_from_pr))
         .route("/stream/ws", get(stream_workspaces_ws))
         .route("/summary", post(workspace_summary::get_workspace_summaries))
+        .route("/statuses", post(get_workspace_statuses))
         .nest("/{id}", task_attempt_id_router)
         .nest("/{id}/images", images::router(deployment));
 

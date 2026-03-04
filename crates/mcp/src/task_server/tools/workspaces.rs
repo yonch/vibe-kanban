@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use db::models::{requests::UpdateWorkspace, workspace::Workspace};
 use rmcp::{
     ErrorData, handler::server::tool::Parameters, model::CallToolResult, schemars, tool,
@@ -7,6 +9,9 @@ use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use super::TaskServer;
+
+const DEFAULT_TIMEOUT_SECONDS: u64 = 1800;
+const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct McpListWorkspacesRequest {
@@ -94,6 +99,44 @@ struct McpDeleteWorkspaceResponse {
     workspace_id: String,
     delete_remote: bool,
     delete_branches: bool,
+}
+
+#[derive(Debug, Deserialize, schemars::JsonSchema)]
+struct McpWaitForWorkspaceRequest {
+    #[schemars(
+        description = "One or more workspace IDs to wait on. When multiple IDs are provided, returns as soon as any one reaches a terminal state."
+    )]
+    workspace_ids: Vec<Uuid>,
+    #[schemars(
+        description = "Maximum time to wait in seconds before returning a timeout response (default: 1800)"
+    )]
+    timeout_seconds: Option<u64>,
+}
+
+#[derive(Debug, Serialize, schemars::JsonSchema)]
+struct McpWaitForWorkspaceResponse {
+    #[schemars(
+        description = "The workspace ID that reached a terminal state (or first ID on timeout)"
+    )]
+    completed_workspace_id: String,
+    #[schemars(description = "Terminal status: 'completed', 'failed', or 'timeout'")]
+    status: String,
+    #[schemars(description = "The branch name of the completed workspace")]
+    branch: String,
+    #[schemars(description = "Timestamp when the workspace completed (if available)")]
+    completed_at: Option<String>,
+}
+
+/// Response shape from the backend /api/task-attempts/statuses endpoint.
+#[derive(Debug, Deserialize)]
+struct WorkspaceStatusEntry {
+    workspace_id: Uuid,
+    branch: String,
+    is_running: bool,
+    is_errored: bool,
+    #[allow(dead_code)]
+    name: Option<String>,
+    completed_at: Option<String>,
 }
 
 #[tool_router(router = workspaces_tools_router, vis = "pub")]
@@ -256,5 +299,75 @@ impl TaskServer {
             delete_remote,
             delete_branches,
         })
+    }
+
+    #[tool(
+        description = "Block until a workspace session reaches a terminal state (completed or failed) or timeout elapses. When multiple workspace IDs are provided, returns as soon as any one reaches a terminal state — call again with the remaining IDs to wait for the next completion."
+    )]
+    async fn wait_for_workspace(
+        &self,
+        Parameters(McpWaitForWorkspaceRequest {
+            workspace_ids,
+            timeout_seconds,
+        }): Parameters<McpWaitForWorkspaceRequest>,
+    ) -> Result<CallToolResult, ErrorData> {
+        if workspace_ids.is_empty() {
+            return Self::err("At least one workspace_id must be provided", None::<&str>);
+        }
+
+        let timeout = Duration::from_secs(timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS));
+        let deadline = tokio::time::Instant::now() + timeout;
+        let url = self.url("/api/task-attempts/statuses");
+
+        loop {
+            let payload = serde_json::json!({ "workspace_ids": workspace_ids });
+
+            let statuses: Vec<WorkspaceStatusEntry> =
+                match self.send_json(self.client.post(&url).json(&payload)).await {
+                    Ok(s) => s,
+                    Err(e) => return Ok(e),
+                };
+
+            // Check if any workspace has reached a terminal state (not running).
+            if let Some(terminal) = statuses.iter().find(|s| !s.is_running) {
+                let status = if terminal.is_errored {
+                    "failed"
+                } else {
+                    "completed"
+                };
+                return TaskServer::success(&McpWaitForWorkspaceResponse {
+                    completed_workspace_id: terminal.workspace_id.to_string(),
+                    status: status.to_string(),
+                    branch: terminal.branch.clone(),
+                    completed_at: terminal.completed_at.clone(),
+                });
+            }
+
+            // Check for workspaces that were not found in the response (deleted or invalid).
+            for id in &workspace_ids {
+                if !statuses.iter().any(|s| s.workspace_id == *id) {
+                    return Self::err(format!("Workspace {} not found", id), None::<String>);
+                }
+            }
+
+            // Check timeout before sleeping.
+            if tokio::time::Instant::now() + POLL_INTERVAL > deadline {
+                let first_id = workspace_ids[0];
+                let first_status = statuses
+                    .iter()
+                    .find(|s| s.workspace_id == first_id)
+                    .map(|s| s.branch.clone())
+                    .unwrap_or_default();
+
+                return TaskServer::success(&McpWaitForWorkspaceResponse {
+                    completed_workspace_id: first_id.to_string(),
+                    status: "timeout".to_string(),
+                    branch: first_status,
+                    completed_at: None,
+                });
+            }
+
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
     }
 }

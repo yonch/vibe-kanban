@@ -11,7 +11,6 @@ use uuid::Uuid;
 use super::TaskServer;
 
 const DEFAULT_TIMEOUT_SECONDS: u64 = 1800;
-const POLL_INTERVAL: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct McpListWorkspacesRequest {
@@ -113,7 +112,7 @@ struct McpWaitForWorkspaceRequest {
     timeout_seconds: Option<u64>,
 }
 
-#[derive(Debug, Serialize, schemars::JsonSchema)]
+#[derive(Debug, Serialize, Deserialize, schemars::JsonSchema)]
 struct McpWaitForWorkspaceResponse {
     #[schemars(
         description = "The workspace ID that reached a terminal state (or first ID on timeout)"
@@ -124,18 +123,6 @@ struct McpWaitForWorkspaceResponse {
     #[schemars(description = "The branch name of the completed workspace")]
     branch: String,
     #[schemars(description = "Timestamp when the workspace completed (if available)")]
-    completed_at: Option<String>,
-}
-
-/// Response shape from the backend /api/task-attempts/statuses endpoint.
-#[derive(Debug, Deserialize)]
-struct WorkspaceStatusEntry {
-    workspace_id: Uuid,
-    branch: String,
-    is_running: bool,
-    is_errored: bool,
-    #[allow(dead_code)]
-    name: Option<String>,
     completed_at: Option<String>,
 }
 
@@ -315,59 +302,30 @@ impl TaskServer {
             return Self::err("At least one workspace_id must be provided", None::<&str>);
         }
 
-        let timeout = Duration::from_secs(timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS));
-        let deadline = tokio::time::Instant::now() + timeout;
-        let url = self.url("/api/task-attempts/statuses");
+        let timeout_secs = timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS);
+        let url = self.url("/api/task-attempts/wait");
+        let payload = serde_json::json!({
+            "workspace_ids": workspace_ids,
+            "timeout_seconds": timeout_secs,
+        });
 
-        loop {
-            let payload = serde_json::json!({ "workspace_ids": workspace_ids });
+        // Use a per-request timeout slightly longer than the server-side timeout
+        // to allow the server to return its own timeout response cleanly.
+        let http_timeout = Duration::from_secs(timeout_secs + 30);
 
-            let statuses: Vec<WorkspaceStatusEntry> =
-                match self.send_json(self.client.post(&url).json(&payload)).await {
-                    Ok(s) => s,
-                    Err(e) => return Ok(e),
-                };
+        let response: McpWaitForWorkspaceResponse = match self
+            .send_json(
+                self.client
+                    .post(&url)
+                    .json(&payload)
+                    .timeout(http_timeout),
+            )
+            .await
+        {
+            Ok(r) => r,
+            Err(e) => return Ok(e),
+        };
 
-            // Check if any workspace has reached a terminal state (not running).
-            if let Some(terminal) = statuses.iter().find(|s| !s.is_running) {
-                let status = if terminal.is_errored {
-                    "failed"
-                } else {
-                    "completed"
-                };
-                return TaskServer::success(&McpWaitForWorkspaceResponse {
-                    completed_workspace_id: terminal.workspace_id.to_string(),
-                    status: status.to_string(),
-                    branch: terminal.branch.clone(),
-                    completed_at: terminal.completed_at.clone(),
-                });
-            }
-
-            // Check for workspaces that were not found in the response (deleted or invalid).
-            for id in &workspace_ids {
-                if !statuses.iter().any(|s| s.workspace_id == *id) {
-                    return Self::err(format!("Workspace {} not found", id), None::<String>);
-                }
-            }
-
-            // Check timeout before sleeping.
-            if tokio::time::Instant::now() + POLL_INTERVAL > deadline {
-                let first_id = workspace_ids[0];
-                let first_status = statuses
-                    .iter()
-                    .find(|s| s.workspace_id == first_id)
-                    .map(|s| s.branch.clone())
-                    .unwrap_or_default();
-
-                return TaskServer::success(&McpWaitForWorkspaceResponse {
-                    completed_workspace_id: first_id.to_string(),
-                    status: "timeout".to_string(),
-                    branch: first_status,
-                    completed_at: None,
-                });
-            }
-
-            tokio::time::sleep(POLL_INTERVAL).await;
-        }
+        TaskServer::success(&response)
     }
 }

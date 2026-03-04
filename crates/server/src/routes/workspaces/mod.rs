@@ -53,6 +53,7 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
             "/summaries",
             post(workspace_summary::get_workspace_summaries),
         )
+        .route("/wait", post(core::wait_for_workspace))
         .nest("/{id}", workspace_id_router)
         .nest("/{id}/images", images::router(deployment))
         .nest("/{id}/links", links::router(deployment));

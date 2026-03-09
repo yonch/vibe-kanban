@@ -3,7 +3,7 @@ import { useParams } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { LinkIcon, PlusIcon } from '@phosphor-icons/react';
-import { attemptKeys } from '@/shared/hooks/useAttempt';
+import { workspaceRecordKeys } from '@/shared/hooks/useWorkspaceRecord';
 import { workspaceSummaryKeys } from '@/shared/hooks/workspaceSummaryKeys';
 import { useProjectContext } from '@/shared/hooks/useProjectContext';
 import { useAuth } from '@/shared/hooks/auth/useAuth';
@@ -299,11 +299,11 @@ export function IssueWorkspacesSectionContainer({
         )?.archived ?? false;
 
       try {
-        await attemptsApi.update(localWorkspaceId, {
+        await workspacesApi.update(localWorkspaceId, {
           archived: !isCurrentlyArchived,
         });
         queryClient.invalidateQueries({
-          queryKey: attemptKeys.byId(localWorkspaceId),
+          queryKey: workspaceRecordKeys.byId(localWorkspaceId),
         });
         queryClient.invalidateQueries({
           queryKey: workspaceSummaryKeys.all,

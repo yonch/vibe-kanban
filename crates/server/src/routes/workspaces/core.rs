@@ -231,11 +231,9 @@ pub async fn wait_for_workspace(
         for id in &request.workspace_ids {
             if let Some(ws) = Workspace::find_by_id_with_status(pool, *id).await? {
                 if !ws.is_running {
-                    let completed_at = ExecutionProcess::latest_completed_at_for_workspace(
-                        pool,
-                        ws.workspace.id,
-                    )
-                    .await?;
+                    let completed_at =
+                        ExecutionProcess::latest_completed_at_for_workspace(pool, ws.workspace.id)
+                            .await?;
 
                     let status = if ws.is_errored { "failed" } else { "completed" };
 

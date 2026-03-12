@@ -53,6 +53,16 @@ pub struct PullRequestInfo {
     pub merge_commit_sha: Option<String>,
 }
 
+/// Workspace-repo pair that has no PR merge record.
+/// Used for auto-detecting PRs created outside of VK.
+#[derive(Debug, Clone, FromRow)]
+pub struct WorkspaceRepoNoPr {
+    pub workspace_id: Uuid,
+    pub repo_id: Uuid,
+    pub workspace_branch: String,
+    pub target_branch: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[sqlx(type_name = "TEXT", rename_all = "snake_case")]
 pub enum MergeType {
@@ -219,6 +229,34 @@ impl Merge {
         .await?;
 
         Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    /// Find workspace-repo pairs that have no PR merge records.
+    /// Used by the PR monitor to discover PRs created outside of VK.
+    /// Only considers active (non-archived) workspaces.
+    pub async fn get_workspace_repos_without_prs(
+        pool: &SqlitePool,
+    ) -> Result<Vec<WorkspaceRepoNoPr>, sqlx::Error> {
+        sqlx::query_as!(
+            WorkspaceRepoNoPr,
+            r#"SELECT
+                wr.workspace_id AS "workspace_id!: Uuid",
+                wr.repo_id AS "repo_id!: Uuid",
+                w.branch AS "workspace_branch!",
+                wr.target_branch AS "target_branch!"
+            FROM workspace_repos wr
+            JOIN workspaces w ON w.id = wr.workspace_id
+            WHERE w.archived = FALSE
+              AND NOT EXISTS (
+                  SELECT 1 FROM merges m
+                  WHERE m.workspace_id = wr.workspace_id
+                    AND m.repo_id = wr.repo_id
+                    AND m.merge_type = 'pr'
+              )
+            ORDER BY w.updated_at DESC"#,
+        )
+        .fetch_all(pool)
+        .await
     }
 
     pub async fn count_open_prs_for_workspace(

@@ -5,10 +5,12 @@ use chrono::Utc;
 use db::{
     DBService,
     models::{
-        merge::{Merge, MergeStatus, PrMerge},
+        merge::{Merge, MergeStatus, PrMerge, WorkspaceRepoNoPr},
+        repo::Repo,
         workspace::{Workspace, WorkspaceError},
     },
 };
+use git::GitServiceError;
 use git_host::{GitHostError, GitHostProvider, GitHostService};
 use serde_json::json;
 use sqlx::error::Error as SqlxError;
@@ -26,6 +28,8 @@ enum PrMonitorError {
     #[error(transparent)]
     GitHostError(#[from] GitHostError),
     #[error(transparent)]
+    GitServiceError(#[from] GitServiceError),
+    #[error(transparent)]
     WorkspaceError(#[from] WorkspaceError),
     #[error(transparent)]
     Sqlx(#[from] SqlxError),
@@ -37,7 +41,7 @@ impl PrMonitorError {
             self,
             PrMonitorError::GitHostError(
                 GitHostError::CliNotInstalled { .. } | GitHostError::NotAGitRepository(_)
-            )
+            ) | PrMonitorError::GitServiceError(_)
         )
     }
 }
@@ -83,6 +87,9 @@ impl<C: ContainerService + Send + Sync + 'static> PrMonitorService<C> {
             if let Err(e) = self.check_all_open_prs().await {
                 error!("Error checking open PRs: {}", e);
             }
+            if let Err(e) = self.discover_new_prs().await {
+                error!("Error discovering new PRs: {}", e);
+            }
         }
     }
 
@@ -112,6 +119,85 @@ impl<C: ContainerService + Send + Sync + 'static> PrMonitorService<C> {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// Discover PRs created outside of VK on workspace branches.
+    /// Checks active workspaces that don't yet have a PR linked and queries GitHub
+    /// for any PRs on their branch. Once created, the existing check_all_open_prs
+    /// flow handles status updates, remote sync, and archival.
+    async fn discover_new_prs(&self) -> Result<(), PrMonitorError> {
+        let candidates = Merge::get_workspace_repos_without_prs(&self.db.pool).await?;
+
+        if candidates.is_empty() {
+            debug!("No workspace repos without PRs to check");
+            return Ok(());
+        }
+
+        debug!(
+            "Checking {} workspace-repo pairs for new PRs",
+            candidates.len()
+        );
+
+        for candidate in &candidates {
+            if let Err(e) = self.discover_pr_for_workspace_repo(candidate).await {
+                if e.is_environmental() {
+                    debug!(
+                        "Skipping PR discovery for workspace {} repo {} due to environmental error: {}",
+                        candidate.workspace_id, candidate.repo_id, e
+                    );
+                } else {
+                    warn!(
+                        "Error discovering PR for workspace {} repo {}: {}",
+                        candidate.workspace_id, candidate.repo_id, e
+                    );
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Check if a PR exists on the branch for a workspace-repo pair and link it.
+    /// Only creates the merge record; status updates and archival are handled by
+    /// check_all_open_prs on the next poll cycle.
+    async fn discover_pr_for_workspace_repo(
+        &self,
+        candidate: &WorkspaceRepoNoPr,
+    ) -> Result<(), PrMonitorError> {
+        let repo = Repo::find_by_id(&self.db.pool, candidate.repo_id)
+            .await?
+            .ok_or_else(|| {
+                PrMonitorError::GitHostError(GitHostError::PullRequest(format!(
+                    "Repo {} not found",
+                    candidate.repo_id
+                )))
+            })?;
+
+        let git = self.container.git();
+        let remote = git.resolve_remote_for_branch(&repo.path, &candidate.target_branch)?;
+
+        let git_host = GitHostService::from_url(&remote.url)?;
+        let prs = git_host
+            .list_prs_for_branch(&repo.path, &remote.url, &candidate.workspace_branch)
+            .await?;
+
+        if let Some(pr_info) = prs.into_iter().next() {
+            info!(
+                "Auto-discovered PR #{} for workspace {} repo {}",
+                pr_info.number, candidate.workspace_id, candidate.repo_id
+            );
+
+            Merge::create_pr(
+                &self.db.pool,
+                candidate.workspace_id,
+                candidate.repo_id,
+                &candidate.target_branch,
+                pr_info.number,
+                &pr_info.url,
+            )
+            .await?;
+        }
+
         Ok(())
     }
 

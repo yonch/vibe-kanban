@@ -1137,8 +1137,11 @@ pub trait ContainerService {
         executor_action: &ExecutorAction,
         run_reason: &ExecutionProcessRunReason,
     ) -> Result<ExecutionProcess, ContainerError> {
+        let fn_start = std::time::Instant::now();
+
         // Create new execution process record
         // Capture current HEAD per repository as the "before" commit for this execution
+        let t = std::time::Instant::now();
         let repositories =
             WorkspaceRepo::find_repos_for_workspace(&self.db().pool, workspace.id).await?;
         if repositories.is_empty() {
@@ -1146,6 +1149,10 @@ pub trait ContainerService {
                 "Workspace has no repositories configured"
             )));
         }
+        tracing::info!(
+            "[latency] start_execution: load_repos={:.1}ms",
+            t.elapsed().as_secs_f64() * 1000.0
+        );
 
         let workspace_root = workspace
             .container_ref
@@ -1153,6 +1160,7 @@ pub trait ContainerService {
             .map(std::path::PathBuf::from)
             .ok_or_else(|| ContainerError::Other(anyhow!("Container ref not found")))?;
 
+        let t = std::time::Instant::now();
         let mut repo_states = Vec::with_capacity(repositories.len());
         for repo in &repositories {
             let repo_path = workspace_root.join(&repo.name);
@@ -1164,12 +1172,19 @@ pub trait ContainerService {
                 merge_commit: None,
             });
         }
+        tracing::info!(
+            "[latency] start_execution: get_head_info={:.1}ms ({} repos)",
+            t.elapsed().as_secs_f64() * 1000.0,
+            repositories.len()
+        );
+
         let create_execution_process = CreateExecutionProcess {
             session_id: session.id,
             executor_action: executor_action.clone(),
             run_reason: run_reason.clone(),
         };
 
+        let t = std::time::Instant::now();
         let execution_process = ExecutionProcess::create(
             &self.db().pool,
             &create_execution_process,
@@ -1180,7 +1195,12 @@ pub trait ContainerService {
         if *run_reason != ExecutionProcessRunReason::ArchiveScript {
             Workspace::set_archived(&self.db().pool, workspace.id, false).await?;
         }
+        tracing::info!(
+            "[latency] start_execution: db_create_execution={:.1}ms",
+            t.elapsed().as_secs_f64() * 1000.0
+        );
 
+        let t = std::time::Instant::now();
         if let Some(prompt) = match executor_action.typ() {
             ExecutorActionType::CodingAgentInitialRequest(coding_agent_request) => {
                 Some(coding_agent_request.prompt.clone())
@@ -1207,7 +1227,12 @@ pub trait ContainerService {
             )
             .await?;
         }
+        tracing::info!(
+            "[latency] start_execution: db_create_turn={:.1}ms",
+            t.elapsed().as_secs_f64() * 1000.0
+        );
 
+        let t = std::time::Instant::now();
         if let Err(start_error) = self
             .start_execution_inner(workspace, &execution_process, executor_action)
             .await
@@ -1273,6 +1298,16 @@ pub trait ContainerService {
             };
             return Err(start_error);
         }
+        tracing::info!(
+            "[latency] start_execution: start_execution_inner={:.1}ms",
+            t.elapsed().as_secs_f64() * 1000.0
+        );
+
+        tracing::info!(
+            "[latency] start_execution: total={:.1}ms execution_id={}",
+            fn_start.elapsed().as_secs_f64() * 1000.0,
+            execution_process.id
+        );
 
         // Start processing normalised logs for executor requests and follow ups
         let workspace_root = self.workspace_to_current_dir(workspace);

@@ -1309,6 +1309,8 @@ impl ContainerService for LocalContainerService {
         execution_process: &ExecutionProcess,
         executor_action: &ExecutorAction,
     ) -> Result<(), ContainerError> {
+        let fn_start = std::time::Instant::now();
+
         // Get the worktree path
         let container_ref = workspace
             .container_ref
@@ -1318,6 +1320,7 @@ impl ContainerService for LocalContainerService {
             )))?;
         let current_dir = PathBuf::from(container_ref);
 
+        let t = std::time::Instant::now();
         let approvals_service: Arc<dyn ExecutorApprovalService> =
             match executor_action.base_executor() {
                 Some(
@@ -1355,8 +1358,14 @@ impl ContainerService for LocalContainerService {
         // Always inject workspace/session context
         env.insert("VK_WORKSPACE_ID", workspace.id.to_string());
         env.insert("VK_WORKSPACE_BRANCH", &workspace.branch);
+        tracing::info!(
+            "[latency] start_execution_inner: setup_env={:.1}ms",
+            t.elapsed().as_secs_f64() * 1000.0
+        );
 
         // Create the child and stream, add to execution tracker with timeout
+        let t = std::time::Instant::now();
+        let executor_name = format!("{:?}", executor_action.base_executor());
         let mut spawned = tokio::time::timeout(
             Duration::from_secs(30),
             executor_action.spawn(&current_dir, approvals_service, &env),
@@ -1367,6 +1376,11 @@ impl ContainerService for LocalContainerService {
                 "Timeout: process took more than 30 seconds to start"
             ))
         })??;
+        tracing::info!(
+            "[latency] start_execution_inner: executor_spawn={:.1}ms executor={}",
+            t.elapsed().as_secs_f64() * 1000.0,
+            executor_name
+        );
 
         self.track_child_msgs_in_store(execution_process.id, &mut spawned.child)
             .await;
@@ -1383,6 +1397,11 @@ impl ContainerService for LocalContainerService {
         // Spawn unified exit monitor: watches OS exit and optional executor signal
         let hn = self.spawn_exit_monitor(&execution_process.id, spawned.exit_signal);
         self.add_exit_monitor_handle(execution_process.id, hn).await;
+
+        tracing::info!(
+            "[latency] start_execution_inner: total={:.1}ms",
+            fn_start.elapsed().as_secs_f64() * 1000.0
+        );
 
         Ok(())
     }

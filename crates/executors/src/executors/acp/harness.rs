@@ -88,7 +88,16 @@ impl AcpAgentHarness {
         cmd_overrides: &CmdOverrides,
         approvals: Option<std::sync::Arc<dyn ExecutorApprovalService>>,
     ) -> Result<SpawnedChild, ExecutorError> {
+        let fn_start = std::time::Instant::now();
+
+        let t = std::time::Instant::now();
         let (program_path, args) = command_parts.into_resolved().await?;
+        tracing::info!(
+            "[latency] acp_spawn: resolve_executable={:.1}ms path={}",
+            t.elapsed().as_secs_f64() * 1000.0,
+            program_path.display()
+        );
+
         let mut command = Command::new(program_path);
         command
             .kill_on_drop(true)
@@ -104,11 +113,17 @@ impl AcpAgentHarness {
             .with_profile(cmd_overrides)
             .apply_to_command(&mut command);
 
+        let t = std::time::Instant::now();
         let mut child = command.group_spawn()?;
+        tracing::info!(
+            "[latency] acp_spawn: group_spawn={:.1}ms",
+            t.elapsed().as_secs_f64() * 1000.0
+        );
 
         let (exit_tx, exit_rx) = tokio::sync::oneshot::channel::<ExecutorExitResult>();
         let cancel = CancellationToken::new();
 
+        let t = std::time::Instant::now();
         Self::bootstrap_acp_connection(
             &mut child,
             current_dir.to_path_buf(),
@@ -122,6 +137,15 @@ impl AcpAgentHarness {
             cancel.clone(),
         )
         .await?;
+        tracing::info!(
+            "[latency] acp_spawn: bootstrap_acp_connection={:.1}ms",
+            t.elapsed().as_secs_f64() * 1000.0
+        );
+
+        tracing::info!(
+            "[latency] acp_spawn: total={:.1}ms",
+            fn_start.elapsed().as_secs_f64() * 1000.0
+        );
 
         Ok(SpawnedChild {
             child,
@@ -141,7 +165,16 @@ impl AcpAgentHarness {
         cmd_overrides: &CmdOverrides,
         approvals: Option<std::sync::Arc<dyn ExecutorApprovalService>>,
     ) -> Result<SpawnedChild, ExecutorError> {
+        let fn_start = std::time::Instant::now();
+
+        let t = std::time::Instant::now();
         let (program_path, args) = command_parts.into_resolved().await?;
+        tracing::info!(
+            "[latency] acp_spawn_follow_up: resolve_executable={:.1}ms path={}",
+            t.elapsed().as_secs_f64() * 1000.0,
+            program_path.display()
+        );
+
         let mut command = Command::new(program_path);
         command
             .kill_on_drop(true)
@@ -157,11 +190,17 @@ impl AcpAgentHarness {
             .with_profile(cmd_overrides)
             .apply_to_command(&mut command);
 
+        let t = std::time::Instant::now();
         let mut child = command.group_spawn()?;
+        tracing::info!(
+            "[latency] acp_spawn_follow_up: group_spawn={:.1}ms",
+            t.elapsed().as_secs_f64() * 1000.0
+        );
 
         let (exit_tx, exit_rx) = tokio::sync::oneshot::channel::<ExecutorExitResult>();
         let cancel = CancellationToken::new();
 
+        let t = std::time::Instant::now();
         Self::bootstrap_acp_connection(
             &mut child,
             current_dir.to_path_buf(),
@@ -175,6 +214,15 @@ impl AcpAgentHarness {
             cancel.clone(),
         )
         .await?;
+        tracing::info!(
+            "[latency] acp_spawn_follow_up: bootstrap_acp_connection={:.1}ms",
+            t.elapsed().as_secs_f64() * 1000.0
+        );
+
+        tracing::info!(
+            "[latency] acp_spawn_follow_up: total={:.1}ms",
+            fn_start.elapsed().as_secs_f64() * 1000.0
+        );
 
         Ok(SpawnedChild {
             child,

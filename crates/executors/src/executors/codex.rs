@@ -633,7 +633,15 @@ impl Codex {
         F: FnOnce(Arc<AppServerClient>, ExitSignalSender) -> Fut + Send + 'static,
         Fut: std::future::Future<Output = Result<(), ExecutorError>> + Send + 'static,
     {
+        let fn_start = std::time::Instant::now();
+
+        let t = std::time::Instant::now();
         let (program_path, args) = command_parts.into_resolved().await?;
+        tracing::info!(
+            "[latency] codex_spawn: resolve_executable={:.1}ms path={}",
+            t.elapsed().as_secs_f64() * 1000.0,
+            program_path.display()
+        );
 
         let mut process = Command::new(program_path);
         process
@@ -652,7 +660,12 @@ impl Codex {
             .with_profile(&self.cmd)
             .apply_to_command(&mut process);
 
+        let t = std::time::Instant::now();
         let mut child = process.group_spawn()?;
+        tracing::info!(
+            "[latency] codex_spawn: group_spawn={:.1}ms",
+            t.elapsed().as_secs_f64() * 1000.0
+        );
 
         let child_stdout = child.inner().stdout.take().ok_or_else(|| {
             ExecutorError::Io(std::io::Error::other("Codex app server missing stdout"))
@@ -676,7 +689,13 @@ impl Codex {
         let commit_reminder_prompt = env.commit_reminder_prompt.clone();
         let cancel_for_task = cancel.clone();
 
+        tracing::info!(
+            "[latency] codex_spawn: total_sync={:.1}ms (before async client init)",
+            fn_start.elapsed().as_secs_f64() * 1000.0
+        );
+
         tokio::spawn(async move {
+            let protocol_start = std::time::Instant::now();
             let exit_signal_tx = ExitSignalSender::new(exit_signal_tx);
             let log_writer = LogWriter::new(new_stdout);
 
@@ -700,11 +719,17 @@ impl Codex {
             );
             client.connect(rpc_peer);
 
+            let t = std::time::Instant::now();
             let result = async {
                 client.initialize().await?;
                 task(client, exit_signal_tx.clone()).await
             }
             .await;
+            tracing::info!(
+                "[latency] codex_protocol: initialize_and_task={:.1}ms total={:.1}ms",
+                t.elapsed().as_secs_f64() * 1000.0,
+                protocol_start.elapsed().as_secs_f64() * 1000.0
+            );
 
             if let Err(err) = result {
                 match &err {

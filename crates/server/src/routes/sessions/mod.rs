@@ -126,25 +126,35 @@ pub async fn follow_up(
     State(deployment): State<DeploymentImpl>,
     Json(payload): Json<CreateFollowUpAttempt>,
 ) -> Result<ResponseJson<ApiResponse<ExecutionProcess>>, ApiError> {
+    let handler_start = std::time::Instant::now();
     let pool = &deployment.db().pool;
 
     // Load workspace from session
+    let t = std::time::Instant::now();
     let workspace = Workspace::find_by_id(pool, session.workspace_id)
         .await?
         .ok_or(ApiError::Workspace(WorkspaceError::ValidationError(
             "Workspace not found".to_string(),
         )))?;
+    tracing::info!(
+        "[latency] follow_up: load_workspace={:.1}ms",
+        t.elapsed().as_secs_f64() * 1000.0
+    );
 
-    tracing::info!("{:?}", workspace);
-
+    let t = std::time::Instant::now();
     deployment
         .container()
         .ensure_container_exists(&workspace)
         .await?;
+    tracing::info!(
+        "[latency] follow_up: ensure_container_exists={:.1}ms",
+        t.elapsed().as_secs_f64() * 1000.0
+    );
 
     let executor_profile_id = payload.executor_config.profile_id();
 
     // Validate executor matches session if session has prior executions
+    let t = std::time::Instant::now();
     let expected_executor: Option<String> =
         ExecutionProcess::latest_executor_profile_for_session(pool, session.id)
             .await?
@@ -165,22 +175,36 @@ pub async fn follow_up(
         Session::update_executor(pool, session.id, &executor_profile_id.executor.to_string())
             .await?;
     }
+    tracing::info!(
+        "[latency] follow_up: executor_validation={:.1}ms",
+        t.elapsed().as_secs_f64() * 1000.0
+    );
 
     if let Some(proc_id) = payload.retry_process_id {
+        let t = std::time::Instant::now();
         let force_when_dirty = payload.force_when_dirty.unwrap_or(false);
         let perform_git_reset = payload.perform_git_reset.unwrap_or(true);
         deployment
             .container()
             .reset_session_to_process(session.id, proc_id, perform_git_reset, force_when_dirty)
             .await?;
+        tracing::info!(
+            "[latency] follow_up: reset_session={:.1}ms",
+            t.elapsed().as_secs_f64() * 1000.0
+        );
     }
 
+    let t = std::time::Instant::now();
     let latest_session_info = CodingAgentTurn::find_latest_session_info(pool, session.id).await?;
 
     let prompt = payload.prompt;
 
     let repos = WorkspaceRepo::find_repos_for_workspace(pool, workspace.id).await?;
     let cleanup_action = deployment.container().cleanup_actions_for_repos(&repos);
+    tracing::info!(
+        "[latency] follow_up: session_info_and_repos={:.1}ms",
+        t.elapsed().as_secs_f64() * 1000.0
+    );
 
     let working_dir = session
         .agent_working_dir
@@ -209,6 +233,7 @@ pub async fn follow_up(
 
     let action = ExecutorAction::new(action_type, cleanup_action.map(Box::new));
 
+    let t = std::time::Instant::now();
     let execution_process = deployment
         .container()
         .start_execution(
@@ -218,6 +243,10 @@ pub async fn follow_up(
             &ExecutionProcessRunReason::CodingAgent,
         )
         .await?;
+    tracing::info!(
+        "[latency] follow_up: start_execution={:.1}ms",
+        t.elapsed().as_secs_f64() * 1000.0
+    );
 
     // Clear the draft follow-up scratch on successful spawn
     // This ensures the scratch is wiped even if the user navigates away quickly
@@ -229,6 +258,12 @@ pub async fn follow_up(
             e
         );
     }
+
+    tracing::info!(
+        "[latency] follow_up: total={:.1}ms session_id={}",
+        handler_start.elapsed().as_secs_f64() * 1000.0,
+        session.id
+    );
 
     Ok(ResponseJson(ApiResponse::success(execution_process)))
 }

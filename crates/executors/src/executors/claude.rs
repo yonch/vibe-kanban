@@ -618,7 +618,16 @@ impl ClaudeCode {
         command_parts: CommandParts,
         env: &ExecutionEnv,
     ) -> Result<SpawnedChild, ExecutorError> {
+        let fn_start = std::time::Instant::now();
+
+        let t = std::time::Instant::now();
         let (program_path, args) = command_parts.into_resolved().await?;
+        tracing::info!(
+            "[latency] claude_spawn: resolve_executable={:.1}ms path={}",
+            t.elapsed().as_secs_f64() * 1000.0,
+            program_path.display()
+        );
+
         let combined_prompt = self.append_prompt.combine_prompt(prompt);
 
         let mut command = Command::new(program_path);
@@ -641,7 +650,13 @@ impl ClaudeCode {
             tracing::info!("ANTHROPIC_API_KEY removed from environment");
         }
 
+        let t = std::time::Instant::now();
         let mut child = command.group_spawn()?;
+        tracing::info!(
+            "[latency] claude_spawn: group_spawn={:.1}ms",
+            t.elapsed().as_secs_f64() * 1000.0
+        );
+
         let child_stdout = child.inner().stdout.take().ok_or_else(|| {
             ExecutorError::Io(std::io::Error::other("Claude Code missing stdout"))
         })?;
@@ -657,6 +672,11 @@ impl ClaudeCode {
         // Create cancellation token for graceful shutdown
         let cancel = CancellationToken::new();
 
+        tracing::info!(
+            "[latency] claude_spawn: total_sync={:.1}ms (before async protocol init)",
+            fn_start.elapsed().as_secs_f64() * 1000.0
+        );
+
         // Spawn task to handle the SDK client with control protocol
         let prompt_clone = combined_prompt.clone();
         let approvals_clone = self.approvals_service.clone();
@@ -664,6 +684,7 @@ impl ClaudeCode {
         let commit_reminder_prompt = env.commit_reminder_prompt.clone();
         let cancel_for_task = cancel.clone();
         tokio::spawn(async move {
+            let protocol_start = std::time::Instant::now();
             let log_writer = LogWriter::new(new_stdout);
             let client = ClaudeAgentClient::new(
                 log_writer.clone(),
@@ -676,6 +697,7 @@ impl ClaudeCode {
                 ProtocolPeer::spawn(child_stdin, child_stdout, client.clone(), cancel_for_task);
 
             // Initialize control protocol
+            let t = std::time::Instant::now();
             if let Err(e) = protocol_peer.initialize(hooks).await {
                 tracing::error!("Failed to initialize control protocol: {e}");
                 let _ = log_writer
@@ -683,18 +705,37 @@ impl ClaudeCode {
                     .await;
                 return;
             }
+            tracing::info!(
+                "[latency] claude_protocol: initialize={:.1}ms",
+                t.elapsed().as_secs_f64() * 1000.0
+            );
 
+            let t = std::time::Instant::now();
             if let Err(e) = protocol_peer.set_permission_mode(permission_mode).await {
                 tracing::warn!("Failed to set permission mode to {permission_mode}: {e}");
             }
+            tracing::info!(
+                "[latency] claude_protocol: set_permission_mode={:.1}ms",
+                t.elapsed().as_secs_f64() * 1000.0
+            );
 
             // Send user message
+            let t = std::time::Instant::now();
             if let Err(e) = protocol_peer.send_user_message(prompt_clone).await {
                 tracing::error!("Failed to send prompt: {e}");
                 let _ = log_writer
                     .log_raw(&format!("Error: Failed to send prompt - {e}"))
                     .await;
             }
+            tracing::info!(
+                "[latency] claude_protocol: send_user_message={:.1}ms",
+                t.elapsed().as_secs_f64() * 1000.0
+            );
+
+            tracing::info!(
+                "[latency] claude_protocol: total={:.1}ms",
+                protocol_start.elapsed().as_secs_f64() * 1000.0
+            );
         });
 
         Ok(SpawnedChild {

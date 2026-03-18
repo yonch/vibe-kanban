@@ -53,10 +53,9 @@ pub struct PullRequestInfo {
     pub merge_commit_sha: Option<String>,
 }
 
-/// Workspace-repo pair that has no PR merge record.
-/// Used for auto-detecting PRs created outside of VK.
+/// Active workspace-repo pair used for auto-detecting PRs created outside of VK.
 #[derive(Debug, Clone, FromRow)]
-pub struct WorkspaceRepoNoPr {
+pub struct ActiveWorkspaceRepo {
     pub workspace_id: Uuid,
     pub repo_id: Uuid,
     pub workspace_branch: String,
@@ -231,14 +230,13 @@ impl Merge {
         Ok(rows.into_iter().map(Into::into).collect())
     }
 
-    /// Find workspace-repo pairs that have no PR merge records.
+    /// Find all active (non-archived) workspace-repo pairs.
     /// Used by the PR monitor to discover PRs created outside of VK.
-    /// Only considers active (non-archived) workspaces.
-    pub async fn get_workspace_repos_without_prs(
+    pub async fn get_active_workspace_repos(
         pool: &SqlitePool,
-    ) -> Result<Vec<WorkspaceRepoNoPr>, sqlx::Error> {
+    ) -> Result<Vec<ActiveWorkspaceRepo>, sqlx::Error> {
         sqlx::query_as!(
-            WorkspaceRepoNoPr,
+            ActiveWorkspaceRepo,
             r#"SELECT
                 wr.workspace_id AS "workspace_id!: Uuid",
                 wr.repo_id AS "repo_id!: Uuid",
@@ -247,13 +245,26 @@ impl Merge {
             FROM workspace_repos wr
             JOIN workspaces w ON w.id = wr.workspace_id
             WHERE w.archived = FALSE
-              AND NOT EXISTS (
-                  SELECT 1 FROM merges m
-                  WHERE m.workspace_id = wr.workspace_id
-                    AND m.repo_id = wr.repo_id
-                    AND m.merge_type = 'pr'
-              )
             ORDER BY w.updated_at DESC"#,
+        )
+        .fetch_all(pool)
+        .await
+    }
+
+    /// Get the set of PR numbers already linked to a workspace-repo pair.
+    pub async fn get_known_pr_numbers(
+        pool: &SqlitePool,
+        workspace_id: Uuid,
+        repo_id: Uuid,
+    ) -> Result<Vec<i64>, sqlx::Error> {
+        sqlx::query_scalar!(
+            r#"SELECT pr_number AS "pr_number!: i64"
+               FROM merges
+               WHERE workspace_id = $1
+                 AND repo_id = $2
+                 AND merge_type = 'pr'"#,
+            workspace_id,
+            repo_id
         )
         .fetch_all(pool)
         .await

@@ -5,7 +5,7 @@ use chrono::Utc;
 use db::{
     DBService,
     models::{
-        merge::{Merge, MergeStatus, PrMerge, WorkspaceRepoNoPr},
+        merge::{ActiveWorkspaceRepo, Merge, MergeStatus, PrMerge},
         repo::Repo,
         workspace::{Workspace, WorkspaceError},
     },
@@ -84,11 +84,13 @@ impl<C: ContainerService + Send + Sync + 'static> PrMonitorService<C> {
 
         loop {
             interval.tick().await;
-            if let Err(e) = self.check_all_open_prs().await {
-                error!("Error checking open PRs: {}", e);
-            }
+            // Discover new PRs first so check_all_open_prs can handle
+            // their status updates in the same cycle.
             if let Err(e) = self.discover_new_prs().await {
                 error!("Error discovering new PRs: {}", e);
+            }
+            if let Err(e) = self.check_all_open_prs().await {
+                error!("Error checking open PRs: {}", e);
             }
         }
     }
@@ -123,14 +125,14 @@ impl<C: ContainerService + Send + Sync + 'static> PrMonitorService<C> {
     }
 
     /// Discover PRs created outside of VK on workspace branches.
-    /// Checks active workspaces that don't yet have a PR linked and queries GitHub
-    /// for any PRs on their branch. Once created, the existing check_all_open_prs
-    /// flow handles status updates, remote sync, and archival.
+    /// Scans all active workspaces, queries GitHub for PRs on their branch,
+    /// and links any not already known. Runs before check_all_open_prs so
+    /// newly discovered PRs get their status checked in the same cycle.
     async fn discover_new_prs(&self) -> Result<(), PrMonitorError> {
-        let candidates = Merge::get_workspace_repos_without_prs(&self.db.pool).await?;
+        let candidates = Merge::get_active_workspace_repos(&self.db.pool).await?;
 
         if candidates.is_empty() {
-            debug!("No workspace repos without PRs to check");
+            debug!("No active workspace repos to check for PRs");
             return Ok(());
         }
 
@@ -140,7 +142,7 @@ impl<C: ContainerService + Send + Sync + 'static> PrMonitorService<C> {
         );
 
         for candidate in &candidates {
-            if let Err(e) = self.discover_pr_for_workspace_repo(candidate).await {
+            if let Err(e) = self.discover_prs_for_workspace_repo(candidate).await {
                 if e.is_environmental() {
                     debug!(
                         "Skipping PR discovery for workspace {} repo {} due to environmental error: {}",
@@ -157,12 +159,12 @@ impl<C: ContainerService + Send + Sync + 'static> PrMonitorService<C> {
         Ok(())
     }
 
-    /// Check if a PR exists on the branch for a workspace-repo pair and link it.
-    /// Only creates the merge record; status updates and archival are handled by
-    /// check_all_open_prs on the next poll cycle.
-    async fn discover_pr_for_workspace_repo(
+    /// Query GitHub for PRs on a workspace branch and link any we don't already know about.
+    /// Only creates merge records; status updates and archival are handled by
+    /// check_all_open_prs later in the same cycle.
+    async fn discover_prs_for_workspace_repo(
         &self,
-        candidate: &WorkspaceRepoNoPr,
+        candidate: &ActiveWorkspaceRepo,
     ) -> Result<(), PrMonitorError> {
         let repo = Repo::find_by_id(&self.db.pool, candidate.repo_id)
             .await?
@@ -181,7 +183,22 @@ impl<C: ContainerService + Send + Sync + 'static> PrMonitorService<C> {
             .list_prs_for_branch(&repo.path, &remote.url, &candidate.workspace_branch)
             .await?;
 
-        if let Some(pr_info) = prs.into_iter().next() {
+        if prs.is_empty() {
+            return Ok(());
+        }
+
+        let known_pr_numbers = Merge::get_known_pr_numbers(
+            &self.db.pool,
+            candidate.workspace_id,
+            candidate.repo_id,
+        )
+        .await?;
+
+        for pr_info in prs {
+            if known_pr_numbers.contains(&pr_info.number) {
+                continue;
+            }
+
             info!(
                 "Auto-discovered PR #{} for workspace {} repo {}",
                 pr_info.number, candidate.workspace_id, candidate.repo_id

@@ -187,12 +187,9 @@ impl<C: ContainerService + Send + Sync + 'static> PrMonitorService<C> {
             return Ok(());
         }
 
-        let known_pr_numbers = Merge::get_known_pr_numbers(
-            &self.db.pool,
-            candidate.workspace_id,
-            candidate.repo_id,
-        )
-        .await?;
+        let known_pr_numbers =
+            Merge::get_known_pr_numbers(&self.db.pool, candidate.workspace_id, candidate.repo_id)
+                .await?;
 
         for pr_info in prs {
             if known_pr_numbers.contains(&pr_info.number) {
@@ -204,7 +201,10 @@ impl<C: ContainerService + Send + Sync + 'static> PrMonitorService<C> {
                 pr_info.number, pr_info.status, candidate.workspace_id, candidate.repo_id
             );
 
-            let merge = Merge::create_pr(
+            // Created as 'open' — check_all_open_prs will pick it up on the
+            // next cycle, detect the actual status, and run the full lifecycle
+            // (archival, remote sync, analytics) if already merged/closed.
+            Merge::create_pr(
                 &self.db.pool,
                 candidate.workspace_id,
                 candidate.repo_id,
@@ -213,18 +213,6 @@ impl<C: ContainerService + Send + Sync + 'static> PrMonitorService<C> {
                 &pr_info.url,
             )
             .await?;
-
-            // create_pr inserts as 'open'; correct the status immediately so
-            // check_all_open_prs doesn't falsely trigger the merged/closed lifecycle.
-            if !matches!(pr_info.status, MergeStatus::Open) {
-                Merge::update_status(
-                    &self.db.pool,
-                    merge.id,
-                    pr_info.status,
-                    pr_info.merge_commit_sha,
-                )
-                .await?;
-            }
         }
 
         Ok(())

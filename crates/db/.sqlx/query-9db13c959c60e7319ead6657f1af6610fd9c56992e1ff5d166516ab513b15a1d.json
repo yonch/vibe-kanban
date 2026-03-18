@@ -1,0 +1,20 @@
+{
+  "db_name": "SQLite",
+  "query": "SELECT pr_number AS \"pr_number!: i64\"\n               FROM merges\n               WHERE workspace_id = $1\n                 AND repo_id = $2\n                 AND merge_type = 'pr'",
+  "describe": {
+    "columns": [
+      {
+        "name": "pr_number!: i64",
+        "ordinal": 0,
+        "type_info": "Integer"
+      }
+    ],
+    "parameters": {
+      "Right": 2
+    },
+    "nullable": [
+      true
+    ]
+  },
+  "hash": "9db13c959c60e7319ead6657f1af6610fd9c56992e1ff5d166516ab513b15a1d"
+}

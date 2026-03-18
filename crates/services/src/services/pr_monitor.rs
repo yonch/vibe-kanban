@@ -200,11 +200,11 @@ impl<C: ContainerService + Send + Sync + 'static> PrMonitorService<C> {
             }
 
             info!(
-                "Auto-discovered PR #{} for workspace {} repo {}",
-                pr_info.number, candidate.workspace_id, candidate.repo_id
+                "Auto-discovered PR #{} ({:?}) for workspace {} repo {}",
+                pr_info.number, pr_info.status, candidate.workspace_id, candidate.repo_id
             );
 
-            Merge::create_pr(
+            let merge = Merge::create_pr(
                 &self.db.pool,
                 candidate.workspace_id,
                 candidate.repo_id,
@@ -213,6 +213,18 @@ impl<C: ContainerService + Send + Sync + 'static> PrMonitorService<C> {
                 &pr_info.url,
             )
             .await?;
+
+            // create_pr inserts as 'open'; correct the status immediately so
+            // check_all_open_prs doesn't falsely trigger the merged/closed lifecycle.
+            if !matches!(pr_info.status, MergeStatus::Open) {
+                Merge::update_status(
+                    &self.db.pool,
+                    merge.id,
+                    pr_info.status,
+                    pr_info.merge_commit_sha,
+                )
+                .await?;
+            }
         }
 
         Ok(())

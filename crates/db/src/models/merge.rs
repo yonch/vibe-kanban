@@ -53,6 +53,15 @@ pub struct PullRequestInfo {
     pub merge_commit_sha: Option<String>,
 }
 
+/// Active workspace-repo pair used for auto-detecting PRs created outside of VK.
+#[derive(Debug, Clone, FromRow)]
+pub struct ActiveWorkspaceRepo {
+    pub workspace_id: Uuid,
+    pub repo_id: Uuid,
+    pub workspace_branch: String,
+    pub target_branch: String,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Type)]
 #[sqlx(type_name = "TEXT", rename_all = "snake_case")]
 pub enum MergeType {
@@ -219,6 +228,46 @@ impl Merge {
         .await?;
 
         Ok(rows.into_iter().map(Into::into).collect())
+    }
+
+    /// Find all active (non-archived) workspace-repo pairs.
+    /// Used by the PR monitor to discover PRs created outside of VK.
+    pub async fn get_active_workspace_repos(
+        pool: &SqlitePool,
+    ) -> Result<Vec<ActiveWorkspaceRepo>, sqlx::Error> {
+        sqlx::query_as!(
+            ActiveWorkspaceRepo,
+            r#"SELECT
+                wr.workspace_id AS "workspace_id!: Uuid",
+                wr.repo_id AS "repo_id!: Uuid",
+                w.branch AS "workspace_branch!",
+                wr.target_branch AS "target_branch!"
+            FROM workspace_repos wr
+            JOIN workspaces w ON w.id = wr.workspace_id
+            WHERE w.archived = FALSE
+            ORDER BY w.updated_at DESC"#,
+        )
+        .fetch_all(pool)
+        .await
+    }
+
+    /// Get the set of PR numbers already linked to a workspace-repo pair.
+    pub async fn get_known_pr_numbers(
+        pool: &SqlitePool,
+        workspace_id: Uuid,
+        repo_id: Uuid,
+    ) -> Result<Vec<i64>, sqlx::Error> {
+        sqlx::query_scalar!(
+            r#"SELECT pr_number AS "pr_number!: i64"
+               FROM merges
+               WHERE workspace_id = $1
+                 AND repo_id = $2
+                 AND merge_type = 'pr'"#,
+            workspace_id,
+            repo_id
+        )
+        .fetch_all(pool)
+        .await
     }
 
     pub async fn count_open_prs_for_workspace(

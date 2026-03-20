@@ -86,6 +86,16 @@ Install dependencies:
 pnpm i
 ```
 
+### Pre-commit hook
+
+The repo includes a pre-commit hook that runs `cargo fmt --check`, `cargo clippy`, and `cargo test` scoped to crates affected by your staged changes. Enable it with:
+
+```bash
+git config core.hooksPath .githooks
+```
+
+The hook requires `cargo` and `python3` on your `PATH`. It uses `scripts/affected-crates.py` to detect which crates (and their reverse dependencies) need checking, so only relevant crates are compiled and tested.
+
 ### Running the dev server
 
 ```bash

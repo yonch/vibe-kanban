@@ -320,6 +320,7 @@ pub struct AuthConfig {
     google: Option<OAuthProviderConfig>,
     jwt_secret: SecretString,
     public_base_url: String,
+    access_token_ttl_seconds: i64,
 }
 
 impl AuthConfig {
@@ -328,6 +329,11 @@ impl AuthConfig {
             .map_err(|_| ConfigError::MissingVar("VIBEKANBAN_REMOTE_JWT_SECRET"))?;
         validate_jwt_secret(&jwt_secret)?;
         let jwt_secret = SecretString::new(jwt_secret.into());
+
+        let access_token_ttl_seconds = env::var("ACCESS_TOKEN_TTL_SECONDS")
+            .ok()
+            .and_then(|v| v.parse::<i64>().ok())
+            .unwrap_or(crate::auth::jwt::DEFAULT_ACCESS_TOKEN_TTL_SECONDS);
 
         let github = match env::var("GITHUB_OAUTH_CLIENT_ID") {
             Ok(client_id) if !client_id.is_empty() => {
@@ -365,6 +371,7 @@ impl AuthConfig {
             google,
             jwt_secret,
             public_base_url,
+            access_token_ttl_seconds,
         })
     }
 
@@ -382,6 +389,10 @@ impl AuthConfig {
 
     pub fn public_base_url(&self) -> &str {
         &self.public_base_url
+    }
+
+    pub fn access_token_ttl_seconds(&self) -> i64 {
+        self.access_token_ttl_seconds
     }
 }
 

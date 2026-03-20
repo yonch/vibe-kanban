@@ -88,13 +88,21 @@ pnpm i
 
 ### Pre-commit hook
 
-The repo includes a pre-commit hook that runs `cargo fmt --check`, `cargo clippy`, and `cargo test` scoped to crates affected by your staged changes. Enable it with:
+The repo includes a pre-commit hook that runs quality checks scoped to your staged changes:
+
+- **Rust** — `cargo fmt --check`, `cargo clippy`, and `cargo test` on affected crates (and their reverse dependencies via `scripts/affected-crates.py`)
+- **Frontend** — `prettier --check`, `tsc --noEmit`, and `eslint` on affected packages (`local-web`, `web-core`, `remote-web`, `ui`)
+- **Guards** — legacy frontend path check and unused i18n key detection when relevant files change
+
+Enable it with:
 
 ```bash
 git config core.hooksPath .githooks
 ```
 
-The hook requires `cargo` and `python3` on your `PATH`. It uses `scripts/affected-crates.py` to detect which crates (and their reverse dependencies) need checking, so only relevant crates are compiled and tested.
+The hook requires `cargo`, `python3`, and `pnpm` on your `PATH`.
+
+> **Vibe Kanban development:** If you use Vibe Kanban to develop this repo, add `git config core.hooksPath .githooks` to the repository's setup script so every workspace gets the hook automatically.
 
 ### Running the dev server
 

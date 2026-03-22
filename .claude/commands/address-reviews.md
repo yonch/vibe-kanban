@@ -84,13 +84,28 @@ For each PR the user wants fixed, start a workspace using the vibe-kanban MCP:
 - **Prompt**: Include:
   - FYI what branch they're on and which PR it corresponds to
   - Each unresolved BugBot comment: the issue title, severity, file/lines, description, and recommended fix
-  - Instruction to run `pnpm run format` then commit and push
+  - Instruction to run `pnpm run format` then commit locally
+  - **Do NOT push.** Tell the agent to commit but NOT push. Explain that the user will review first and approve before pushing.
 
 Start all workspaces in parallel (one per PR).
 
-### 8. Monitor and verify
+### 8. Present workspace results for review
 
-After workspaces complete, re-check the PRs using the GraphQL query from step 2 to verify:
+After workspaces complete, show the user what each workspace did (branch name, commit messages, files changed).
+
+The user will review and either approve or request changes. When the user approves (e.g. "lgtm", "looks good", "approve", "push", "ship it"):
+- For each approved workspace, push the fix to the corresponding PR branch:
+  ```
+  # Run inside the workspace via a new session prompt:
+  git push origin HEAD:<pr-head-branch>
+  ```
+  Use the PR head branch name recorded from step 1 — the user should NOT need to specify which branch to push to.
+
+If the user requests changes, start a new session in the workspace with the feedback and repeat.
+
+### 9. Verify after push
+
+After pushing, re-check the PRs using the GraphQL query from step 2 to verify:
 - Previously unresolved threads are now resolved
 - No new BugBot issues appeared on new commits
 

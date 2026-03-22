@@ -2,11 +2,14 @@ import {
   ArrowRight,
   GitBranch as GitBranchIcon,
   GitPullRequest,
+  GitMerge,
   RefreshCw,
   Settings,
   AlertTriangle,
   CheckCircle,
   ExternalLink,
+  ChevronDown,
+  Loader2,
 } from 'lucide-react';
 import { Button } from '@vibe/ui/components/Button';
 import {
@@ -15,12 +18,21 @@ import {
   TooltipProvider,
   TooltipTrigger,
 } from '@vibe/ui/components/RadixTooltip';
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from '@vibe/ui/components/DropdownMenu';
 import { useCallback, useMemo, useState } from 'react';
 import type { RepoBranchStatus, Merge, Workspace } from 'shared/types';
 import { ChangeTargetBranchDialog } from '@/shared/dialogs/command-bar/ChangeTargetBranchDialog';
 import RepoSelector from '@/shared/components/tasks/RepoSelector';
 import { BranchRebaseDialog } from '@/shared/dialogs/command-bar/BranchRebaseDialog';
 import { CreatePRDialog } from '@/shared/dialogs/command-bar/CreatePRDialog';
+import { workspacesApi } from '@/shared/lib/api';
+import { splitMessageToTitleDescription } from '@/shared/lib/string';
+import { useQueryClient } from '@tanstack/react-query';
 
 import { useTranslation } from 'react-i18next';
 import { useWorkspaceRepo } from '@/shared/hooks/useWorkspaceRepo';
@@ -57,12 +69,16 @@ function GitOperations({
   const { data: branches = [] } = useRepoBranches(selectedRepoId);
   const isChangingTargetBranch = git.states.changeTargetBranchPending;
 
+  const queryClient = useQueryClient();
+
   // Local state for git operations
   const [merging, setMerging] = useState(false);
   const [pushing, setPushing] = useState(false);
   const [rebasing, setRebasing] = useState(false);
   const [mergeSuccess, setMergeSuccess] = useState(false);
   const [pushSuccess, setPushSuccess] = useState(false);
+  const [squashMerging, setSquashMerging] = useState(false);
+  const [squashMergeSuccess, setSquashMergeSuccess] = useState(false);
 
   // Target branch change handlers
   const handleChangeTargetBranchClick = async (newBranch: string) => {
@@ -256,6 +272,103 @@ function GitOperations({
     });
   };
 
+  const PR_TITLE_SUFFIX = ' (vibe-kanban)';
+
+  const handleSquashMerge = async () => {
+    const repoId = getSelectedRepoId();
+    if (!repoId) return;
+    try {
+      setSquashMerging(true);
+      const result = await workspacesApi.squashMergePR(selectedAttempt.id, {
+        repo_id: repoId,
+      });
+      if (result.success) {
+        setSquashMergeSuccess(true);
+        setTimeout(() => setSquashMergeSuccess(false), 2000);
+        queryClient.invalidateQueries({
+          queryKey: ['branchStatus', selectedAttempt.id],
+        });
+      } else {
+        console.error('Squash-merge failed:', result.message || result.error);
+      }
+    } finally {
+      setSquashMerging(false);
+    }
+  };
+
+  const handlePRAndSquashMerge = async () => {
+    const repoId = getSelectedRepoId();
+    if (!repoId) return;
+
+    try {
+      setSquashMerging(true);
+
+      // Build default PR title/body from first user message
+      let prTitle = '';
+      let prBody = '';
+      try {
+        const firstMsg = await workspacesApi.getFirstUserMessage(
+          selectedAttempt.id
+        );
+        if (firstMsg?.trim()) {
+          const { title, description } =
+            splitMessageToTitleDescription(firstMsg);
+          prTitle = title.trim();
+          if (!prTitle.endsWith(PR_TITLE_SUFFIX)) {
+            prTitle = `${prTitle}${PR_TITLE_SUFFIX}`;
+          }
+          prBody = description ?? '';
+        }
+      } catch {
+        // Fall through with empty title/body
+      }
+
+      if (!prTitle) {
+        prTitle = `${selectedAttempt.branch}${PR_TITLE_SUFFIX}`;
+      }
+
+      // Step 1: Create the PR
+      const createResult = await workspacesApi.createPR(selectedAttempt.id, {
+        title: prTitle,
+        body: prBody || null,
+        target_branch: getSelectedRepoStatus()?.target_branch_name ?? null,
+        draft: false,
+        auto_generate_description: false,
+        repo_id: repoId,
+      });
+
+      if (!createResult.success) {
+        console.error('PR creation failed:', createResult.message);
+        return;
+      }
+
+      // Invalidate to pick up the new PR
+      await queryClient.invalidateQueries({
+        queryKey: ['branchStatus', selectedAttempt.id],
+      });
+
+      // Step 2: Squash-merge the PR
+      const mergeResult = await workspacesApi.squashMergePR(
+        selectedAttempt.id,
+        { repo_id: repoId }
+      );
+      if (mergeResult.success) {
+        setSquashMergeSuccess(true);
+        setTimeout(() => setSquashMergeSuccess(false), 2000);
+        queryClient.invalidateQueries({
+          queryKey: ['branchStatus', selectedAttempt.id],
+        });
+      } else {
+        console.error(
+          'Squash-merge failed:',
+          mergeResult.message || mergeResult.error
+        );
+      }
+    } finally {
+      setSquashMerging(false);
+    }
+  };
+
   const isVertical = layout === 'vertical';
 
   const containerClasses = isVertical
@@ -306,19 +419,43 @@ function GitOperations({
         if (mergeInfo.hasOpenPR && mergeInfo.openPR?.type === 'pr') {
           const prMerge = mergeInfo.openPR;
           return (
-            <button
-              onClick={() => window.open(prMerge.pr_info.url, '_blank')}
-              className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-sky-100/60 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300 hover:underline truncate max-w-[180px] sm:max-w-none"
-              aria-label={t('git.pr.open', {
-                number: Number(prMerge.pr_info.number),
-              })}
-            >
-              <GitPullRequest className="h-3.5 w-3.5" />
-              {t('git.pr.number', {
-                number: Number(prMerge.pr_info.number),
-              })}
-              <ExternalLink className="h-3.5 w-3.5" />
-            </button>
+            <DropdownMenu>
+              <DropdownMenuTrigger asChild>
+                <button
+                  className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-sky-100/60 dark:bg-sky-900/30 text-sky-700 dark:text-sky-300 hover:underline truncate max-w-[220px] sm:max-w-none"
+                  aria-label={t('git.pr.open', {
+                    number: Number(prMerge.pr_info.number),
+                  })}
+                >
+                  <GitPullRequest className="h-3.5 w-3.5" />
+                  {t('git.pr.number', {
+                    number: Number(prMerge.pr_info.number),
+                  })}
+                  <ChevronDown className="h-3 w-3" />
+                </button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuItem
+                  onClick={() => window.open(prMerge.pr_info.url, '_blank')}
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                  {t('git.pr.open', {
+                    number: Number(prMerge.pr_info.number),
+                  })}
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={handleSquashMerge}
+                  disabled={squashMerging}
+                >
+                  {squashMerging ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <GitMerge className="h-3.5 w-3.5" />
+                  )}
+                  {t('git.pr.squashMerge')}
+                </DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
           );
         }
 
@@ -490,11 +627,11 @@ function GitOperations({
               <span className="truncate max-w-[10ch]">{mergeButtonLabel}</span>
             </Button>
 
-            <Button
-              onClick={handlePRButtonClick}
-              disabled={
+            {(() => {
+              const prDisabled =
                 mergeInfo.hasMergedPR ||
                 pushing ||
+                squashMerging ||
                 isAttemptRunning ||
                 hasConflictsCalculated ||
                 (mergeInfo.hasOpenPR &&
@@ -502,16 +639,84 @@ function GitOperations({
                 ((selectedRepoStatus?.commits_ahead ?? 0) === 0 &&
                   (selectedRepoStatus?.remote_commits_ahead ?? 0) === 0 &&
                   !pushSuccess &&
-                  !mergeSuccess)
+                  !mergeSuccess);
+
+              const showSquashMergeLabel = squashMerging || squashMergeSuccess;
+
+              const label = showSquashMergeLabel
+                ? squashMergeSuccess
+                  ? t('git.states.squashMerged')
+                  : t('git.states.squashMerging')
+                : prButtonLabel;
+
+              // When PR already exists, no dropdown needed
+              if (mergeInfo.hasOpenPR) {
+                return (
+                  <Button
+                    onClick={handlePRButtonClick}
+                    disabled={prDisabled}
+                    variant="outline"
+                    size="xs"
+                    className="border-info text-info hover:bg-info gap-1 shrink-0"
+                    aria-label={label}
+                  >
+                    <GitPullRequest className="h-3.5 w-3.5" />
+                    <span className="truncate max-w-[10ch]">{label}</span>
+                  </Button>
+                );
               }
-              variant="outline"
-              size="xs"
-              className="border-info text-info hover:bg-info gap-1 shrink-0"
-              aria-label={prButtonLabel}
-            >
-              <GitPullRequest className="h-3.5 w-3.5" />
-              <span className="truncate max-w-[10ch]">{prButtonLabel}</span>
-            </Button>
+
+              // Show split button: Create PR + dropdown with "PR & squash-merge"
+              return (
+                <div className="flex items-stretch shrink-0">
+                  <Button
+                    onClick={handlePRButtonClick}
+                    disabled={prDisabled}
+                    variant="outline"
+                    size="xs"
+                    className="border-info text-info hover:bg-info gap-1 rounded-r-none border-r-0"
+                    aria-label={label}
+                  >
+                    {squashMerging ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <GitPullRequest className="h-3.5 w-3.5" />
+                    )}
+                    <span className="truncate max-w-[14ch]">{label}</span>
+                  </Button>
+                  <DropdownMenu>
+                    <DropdownMenuTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="xs"
+                        disabled={prDisabled}
+                        className="border-info text-info hover:bg-info rounded-l-none px-1"
+                        aria-label="PR options"
+                      >
+                        <ChevronDown className="h-3 w-3" />
+                      </Button>
+                    </DropdownMenuTrigger>
+                    <DropdownMenuContent align="end">
+                      <DropdownMenuItem onClick={handlePRButtonClick}>
+                        <GitPullRequest className="h-3.5 w-3.5" />
+                        {t('git.states.createPr')}
+                      </DropdownMenuItem>
+                      <DropdownMenuItem
+                        onClick={handlePRAndSquashMerge}
+                        disabled={squashMerging}
+                      >
+                        {squashMerging ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <GitMerge className="h-3.5 w-3.5" />
+                        )}
+                        {t('git.states.prAndSquashMerge')}
+                      </DropdownMenuItem>
+                    </DropdownMenuContent>
+                  </DropdownMenu>
+                </div>
+              );
+            })()}
 
             <Button
               onClick={handleRebaseDialogOpen}

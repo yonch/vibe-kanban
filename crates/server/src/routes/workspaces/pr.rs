@@ -836,9 +836,168 @@ pub async fn create_workspace_from_pr(
     )))
 }
 
+#[derive(Debug, Deserialize, Serialize, TS)]
+pub struct SquashMergePrRequest {
+    pub repo_id: Uuid,
+}
+
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[serde(tag = "type", rename_all = "snake_case")]
+#[ts(tag = "type", rename_all = "snake_case")]
+pub enum SquashMergeError {
+    NoPrAttached,
+    PrNotOpen,
+    CliNotInstalled { provider: ProviderKind },
+    CliNotLoggedIn { provider: ProviderKind },
+    UnsupportedProvider,
+    MergeFailed { message: String },
+}
+
+pub async fn squash_merge_pr(
+    Extension(workspace): Extension<Workspace>,
+    State(deployment): State<DeploymentImpl>,
+    Json(request): Json<SquashMergePrRequest>,
+) -> Result<ResponseJson<ApiResponse<String, SquashMergeError>>, ApiError> {
+    let pool = &deployment.db().pool;
+
+    let workspace_repo =
+        WorkspaceRepo::find_by_workspace_and_repo_id(pool, workspace.id, request.repo_id)
+            .await?
+            .ok_or(RepoError::NotFound)?;
+
+    let repo = Repo::find_by_id(pool, workspace_repo.repo_id)
+        .await?
+        .ok_or(RepoError::NotFound)?;
+
+    // Find the open PR for this workspace/repo
+    let merges = Merge::find_by_workspace_and_repo_id(pool, workspace.id, request.repo_id).await?;
+    let pr_merge = merges.into_iter().find_map(|m| match m {
+        Merge::Pr(pr) if matches!(pr.pr_info.status, MergeStatus::Open) => Some(pr),
+        _ => None,
+    });
+
+    let pr_merge = match pr_merge {
+        Some(pr) => pr,
+        None => {
+            // Check if there's any PR at all (might be closed/merged)
+            let has_any_pr =
+                Merge::find_by_workspace_and_repo_id(pool, workspace.id, request.repo_id)
+                    .await?
+                    .iter()
+                    .any(|m| matches!(m, Merge::Pr(_)));
+            return Ok(ResponseJson(ApiResponse::error_with_data(if has_any_pr {
+                SquashMergeError::PrNotOpen
+            } else {
+                SquashMergeError::NoPrAttached
+            })));
+        }
+    };
+
+    let git = deployment.git();
+    let remote = git.resolve_remote_for_branch(&repo.path, &workspace_repo.target_branch)?;
+
+    let git_host = match GitHostService::from_url(&remote.url) {
+        Ok(host) => host,
+        Err(GitHostError::UnsupportedProvider) => {
+            return Ok(ResponseJson(ApiResponse::error_with_data(
+                SquashMergeError::UnsupportedProvider,
+            )));
+        }
+        Err(GitHostError::CliNotInstalled { provider }) => {
+            return Ok(ResponseJson(ApiResponse::error_with_data(
+                SquashMergeError::CliNotInstalled { provider },
+            )));
+        }
+        Err(e) => return Err(ApiError::GitHost(e)),
+    };
+
+    let provider = git_host.provider_kind();
+
+    match git_host
+        .squash_merge_pr(&repo.path, &remote.url, pr_merge.pr_info.number)
+        .await
+    {
+        Ok(updated_pr_info) => {
+            // Update merge status in DB
+            Merge::update_status(
+                pool,
+                pr_merge.id,
+                MergeStatus::Merged,
+                updated_pr_info.merge_commit_sha.clone(),
+            )
+            .await?;
+
+            // Sync to remote
+            if let Ok(client) = deployment.remote_client() {
+                let request = UpsertPullRequestRequest {
+                    url: updated_pr_info.url.clone(),
+                    number: updated_pr_info.number as i32,
+                    status: PullRequestStatus::Merged,
+                    merged_at: updated_pr_info.merged_at,
+                    merge_commit_sha: updated_pr_info.merge_commit_sha.clone(),
+                    target_branch_name: workspace_repo.target_branch.clone(),
+                    local_workspace_id: workspace.id,
+                };
+                tokio::spawn(async move {
+                    remote_sync::sync_pr_to_remote(&client, request).await;
+                });
+            }
+
+            // Archive workspace if not pinned and no other open PRs
+            let open_pr_count = Merge::count_open_prs_for_workspace(pool, workspace.id).await?;
+            if open_pr_count == 0
+                && !workspace.pinned
+                && let Err(e) = deployment.container().archive_workspace(workspace.id).await
+            {
+                tracing::error!("Failed to archive workspace {}: {}", workspace.id, e);
+            }
+
+            deployment
+                .track_if_analytics_allowed(
+                    "pr_squash_merged",
+                    serde_json::json!({
+                        "workspace_id": workspace.id.to_string(),
+                        "pr_number": pr_merge.pr_info.number,
+                        "provider": format!("{:?}", provider),
+                    }),
+                )
+                .await;
+
+            Ok(ResponseJson(ApiResponse::success(updated_pr_info.url)))
+        }
+        Err(e) => {
+            tracing::error!(
+                "Failed to squash-merge PR #{} for workspace {}: {}",
+                pr_merge.pr_info.number,
+                workspace.id,
+                e
+            );
+            match &e {
+                GitHostError::CliNotInstalled { provider } => Ok(ResponseJson(
+                    ApiResponse::error_with_data(SquashMergeError::CliNotInstalled {
+                        provider: *provider,
+                    }),
+                )),
+                GitHostError::AuthFailed(_) => Ok(ResponseJson(ApiResponse::error_with_data(
+                    SquashMergeError::CliNotLoggedIn { provider },
+                ))),
+                GitHostError::UnsupportedProvider => Ok(ResponseJson(
+                    ApiResponse::error_with_data(SquashMergeError::UnsupportedProvider),
+                )),
+                _ => Ok(ResponseJson(ApiResponse::error_with_data(
+                    SquashMergeError::MergeFailed {
+                        message: e.to_string(),
+                    },
+                ))),
+            }
+        }
+    }
+}
+
 pub fn router() -> Router<DeploymentImpl> {
     Router::new()
         .route("/", post(create_pr))
         .route("/attach", post(attach_existing_pr))
         .route("/comments", get(get_pr_comments))
+        .route("/squash-merge", post(squash_merge_pr))
 }

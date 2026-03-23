@@ -254,6 +254,7 @@
       "mergeChanges": "Failed to merge changes",
       "rebaseBranch": "Failed to rebase branch",
       "squashMerge": "Failed to squash-merge PR",
+      "createPr": "Failed to create PR",
       "branchStatusUnavailable": "Unable to fetch branch status. You can still change the target branch."
     },
     "pr": {

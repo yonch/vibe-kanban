@@ -872,6 +872,7 @@ pub async fn squash_merge_pr(
 
     // Find the open PR for this workspace/repo
     let merges = Merge::find_by_workspace_and_repo_id(pool, workspace.id, request.repo_id).await?;
+    let has_any_pr = merges.iter().any(|m| matches!(m, Merge::Pr(_)));
     let pr_merge = merges.into_iter().find_map(|m| match m {
         Merge::Pr(pr) if matches!(pr.pr_info.status, MergeStatus::Open) => Some(pr),
         _ => None,
@@ -880,12 +881,6 @@ pub async fn squash_merge_pr(
     let pr_merge = match pr_merge {
         Some(pr) => pr,
         None => {
-            // Check if there's any PR at all (might be closed/merged)
-            let has_any_pr =
-                Merge::find_by_workspace_and_repo_id(pool, workspace.id, request.repo_id)
-                    .await?
-                    .iter()
-                    .any(|m| matches!(m, Merge::Pr(_)));
             return Ok(ResponseJson(ApiResponse::error_with_data(if has_any_pr {
                 SquashMergeError::PrNotOpen
             } else {

@@ -40,6 +40,8 @@ import { useGitOperations } from '@/shared/hooks/useGitOperations';
 import { useGitOperationsError } from '@/shared/hooks/GitOperationsContext';
 import { useRepoBranches } from '@/shared/hooks/useRepoBranches';
 
+const PR_TITLE_SUFFIX = ' (vibe-kanban)';
+
 interface GitOperationsProps {
   selectedAttempt: Workspace;
   branchStatus: RepoBranchStatus[] | null;
@@ -274,8 +276,6 @@ function GitOperations({
     });
   };
 
-  const PR_TITLE_SUFFIX = ' (vibe-kanban)';
-
   const handleSquashMerge = async () => {
     const repoId = getSelectedRepoId();
     if (!repoId) return;
@@ -340,7 +340,7 @@ function GitOperations({
       });
 
       if (!createResult.success) {
-        setError(createResult.message || t('git.errors.squashMerge'));
+        setError(createResult.message || t('git.errors.createPr'));
         return;
       }
 

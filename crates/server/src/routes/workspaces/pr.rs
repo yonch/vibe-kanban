@@ -847,6 +847,7 @@ pub struct SquashMergePrRequest {
 pub enum SquashMergeError {
     NoPrAttached,
     PrNotOpen,
+    UnpushedCommits,
     CliNotInstalled { provider: ProviderKind },
     CliNotLoggedIn { provider: ProviderKind },
     UnsupportedProvider,
@@ -893,7 +894,30 @@ pub async fn squash_merge_pr(
         }
     };
 
+    // Ensure all local commits have been pushed before merging
+    let container_ref = deployment
+        .container()
+        .ensure_container_exists(&workspace)
+        .await?;
+    let worktree_path = PathBuf::from(&container_ref).join(&repo.name);
+
     let git = deployment.git();
+    match git.get_remote_branch_status(&worktree_path, &workspace.branch, None) {
+        Ok((ahead, _)) if ahead > 0 => {
+            return Ok(ResponseJson(ApiResponse::error_with_data(
+                SquashMergeError::UnpushedCommits,
+            )));
+        }
+        Ok(_) => {} // All commits pushed
+        Err(e) => {
+            tracing::warn!(
+                "Failed to check remote branch status before squash-merge: {}",
+                e
+            );
+            // Continue — the merge itself will fail if there's a real problem
+        }
+    }
+
     let remote = git.resolve_remote_for_branch(&repo.path, &workspace_repo.target_branch)?;
 
     let git_host = match GitHostService::from_url(&remote.url) {

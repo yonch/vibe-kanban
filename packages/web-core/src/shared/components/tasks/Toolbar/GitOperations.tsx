@@ -37,6 +37,7 @@ import { useQueryClient } from '@tanstack/react-query';
 import { useTranslation } from 'react-i18next';
 import { useWorkspaceRepo } from '@/shared/hooks/useWorkspaceRepo';
 import { useGitOperations } from '@/shared/hooks/useGitOperations';
+import { useGitOperationsError } from '@/shared/hooks/GitOperationsContext';
 import { useRepoBranches } from '@/shared/hooks/useRepoBranches';
 
 interface GitOperationsProps {
@@ -66,6 +67,7 @@ function GitOperations({
     selectedAttempt.id
   );
   const git = useGitOperations(selectedAttempt.id, selectedRepoId ?? undefined);
+  const { setError } = useGitOperationsError();
   const { data: branches = [] } = useRepoBranches(selectedRepoId);
   const isChangingTargetBranch = git.states.changeTargetBranchPending;
 
@@ -289,7 +291,7 @@ function GitOperations({
           queryKey: ['branchStatus', selectedAttempt.id],
         });
       } else {
-        console.error('Squash-merge failed:', result.message || result.error);
+        setError(result.message || t('git.errors.squashMerge'));
       }
     } finally {
       setSquashMerging(false);
@@ -338,7 +340,7 @@ function GitOperations({
       });
 
       if (!createResult.success) {
-        console.error('PR creation failed:', createResult.message);
+        setError(createResult.message || t('git.errors.squashMerge'));
         return;
       }
 
@@ -359,10 +361,7 @@ function GitOperations({
           queryKey: ['branchStatus', selectedAttempt.id],
         });
       } else {
-        console.error(
-          'Squash-merge failed:',
-          mergeResult.message || mergeResult.error
-        );
+        setError(mergeResult.message || t('git.errors.squashMerge'));
       }
     } finally {
       setSquashMerging(false);
@@ -445,7 +444,10 @@ function GitOperations({
                 </DropdownMenuItem>
                 <DropdownMenuItem
                   onClick={handleSquashMerge}
-                  disabled={squashMerging}
+                  disabled={
+                    squashMerging ||
+                    (selectedRepoStatus?.remote_commits_ahead ?? 0) > 0
+                  }
                 >
                   {squashMerging ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />

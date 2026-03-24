@@ -335,21 +335,21 @@ impl AuthConfig {
                 Ok(0) => {
                     tracing::warn!(
                         "ACCESS_TOKEN_TTL_SECONDS=0 is invalid, using default ({}s)",
-                        crate::auth::jwt::DEFAULT_ACCESS_TOKEN_TTL_SECONDS
+                        crate::auth::DEFAULT_ACCESS_TOKEN_TTL_SECONDS
                     );
-                    crate::auth::jwt::DEFAULT_ACCESS_TOKEN_TTL_SECONDS
+                    crate::auth::DEFAULT_ACCESS_TOKEN_TTL_SECONDS
                 }
                 Ok(val) => val,
                 Err(_) => {
                     tracing::warn!(
                         "ACCESS_TOKEN_TTL_SECONDS={:?} is not a valid u64, using default ({}s)",
                         v,
-                        crate::auth::jwt::DEFAULT_ACCESS_TOKEN_TTL_SECONDS
+                        crate::auth::DEFAULT_ACCESS_TOKEN_TTL_SECONDS
                     );
-                    crate::auth::jwt::DEFAULT_ACCESS_TOKEN_TTL_SECONDS
+                    crate::auth::DEFAULT_ACCESS_TOKEN_TTL_SECONDS
                 }
             },
-            Err(_) => crate::auth::jwt::DEFAULT_ACCESS_TOKEN_TTL_SECONDS,
+            Err(_) => crate::auth::DEFAULT_ACCESS_TOKEN_TTL_SECONDS,
         };
 
         let github = match env::var("GITHUB_OAUTH_CLIENT_ID") {

@@ -308,7 +308,7 @@ impl McpServer {
             .await
         {
             Ok(r) => r,
-            Err(e) => return Ok(e),
+            Err(e) => return Ok(Self::tool_error(e)),
         };
 
         McpServer::success(&response)

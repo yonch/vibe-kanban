@@ -1,4 +1,7 @@
-use std::{sync::Arc, sync::Mutex, time::Duration};
+use std::{
+    sync::{Arc, Mutex},
+    time::Duration,
+};
 
 use api_types::{PullRequestStatus, UpdatePullRequestApiRequest, UpsertPullRequestRequest};
 use chrono::{DateTime, Utc};

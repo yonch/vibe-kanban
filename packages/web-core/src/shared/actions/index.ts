@@ -881,6 +881,67 @@ export const Actions = {
       if (!result.success && result.error) {
         throw new Error(result.error);
       }
+
+      if (result.success && result.squashMerge) {
+        const mergeResult = await workspacesApi.squashMergePR(workspaceId, {
+          repo_id: repoId,
+        });
+        ctx.queryClient.invalidateQueries({
+          queryKey: ['branchStatus', workspaceId],
+        });
+        invalidateWorkspaceQueries(ctx.queryClient, workspaceId);
+        if (!mergeResult.success) {
+          throw new Error(mergeResult.message || 'Failed to squash-merge PR');
+        }
+      }
+    },
+  },
+
+  GitPRAndSquashMerge: {
+    id: 'git-pr-and-squash-merge',
+    label: 'PR & squash-merge',
+    icon: GitMergeIcon,
+    requiresTarget: ActionTargetType.GIT,
+    isVisible: (ctx) => ctx.hasWorkspace && ctx.hasGitRepos,
+    execute: async (ctx, workspaceId, repoId) => {
+      const workspace = await getWorkspace(ctx.queryClient, workspaceId);
+
+      const repos = await workspacesApi.getRepos(workspaceId);
+      const repo = repos.find((r) => r.id === repoId);
+
+      let issueIdentifier: string | undefined;
+      const remoteWs = ctx.remoteWorkspaces.find(
+        (w) => w.local_workspace_id === workspaceId
+      );
+      if (remoteWs?.issue_id && ctx.projectMutations?.getIssue) {
+        const issue = ctx.projectMutations.getIssue(remoteWs.issue_id);
+        issueIdentifier = issue?.simple_id || remoteWs.issue_id;
+      }
+
+      const result = await CreatePRDialog.show({
+        attempt: workspace,
+        repoId,
+        targetBranch: repo?.target_branch,
+        issueIdentifier,
+        defaultSquashMerge: true,
+      });
+
+      if (!result.success && result.error) {
+        throw new Error(result.error);
+      }
+
+      if (result.success && result.squashMerge) {
+        const mergeResult = await workspacesApi.squashMergePR(workspaceId, {
+          repo_id: repoId,
+        });
+        ctx.queryClient.invalidateQueries({
+          queryKey: ['branchStatus', workspaceId],
+        });
+        invalidateWorkspaceQueries(ctx.queryClient, workspaceId);
+        if (!mergeResult.success) {
+          throw new Error(mergeResult.message || 'Failed to squash-merge PR');
+        }
+      }
     },
   },
 

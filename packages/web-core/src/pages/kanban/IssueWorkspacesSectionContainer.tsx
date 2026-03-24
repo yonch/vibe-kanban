@@ -12,7 +12,7 @@ import { useUserContext } from '@/shared/hooks/useUserContext';
 import { useWorkspaceContext } from '@/shared/hooks/useWorkspaceContext';
 import { useAppNavigation } from '@/shared/hooks/useAppNavigation';
 import { useProjectWorkspaceCreateDraft } from '@/shared/hooks/useProjectWorkspaceCreateDraft';
-import { workspacesApi } from '@/shared/lib/api';
+import { useWorkspaceActions } from '@/shared/hooks/useWorkspaceActions';
 import { getWorkspaceDefaults } from '@/shared/lib/workspaceDefaults';
 import {
   buildLinkedIssueCreateState,
@@ -21,7 +21,6 @@ import {
   buildWorkspaceCreatePrompt,
 } from '@/shared/lib/workspaceCreateState';
 import { ConfirmDialog } from '@vibe/ui/components/ConfirmDialog';
-import { DeleteWorkspaceDialog } from '@vibe/ui/components/DeleteWorkspaceDialog';
 import type { WorkspaceWithStats } from '@vibe/ui/components/IssueWorkspaceCard';
 import { IssueWorkspacesSection } from '@vibe/ui/components/IssueWorkspacesSection';
 import type { SectionAction } from '@vibe/ui/components/CollapsibleSectionHeader';
@@ -120,6 +119,26 @@ export function IssueWorkspacesSectionContainer({
     localWorkspacesById,
   ]);
 
+  const findWorkspace = useCallback(
+    (localWorkspaceId: string) =>
+      workspacesWithStats.find(
+        (ws) => ws.localWorkspaceId === localWorkspaceId
+      ),
+    [workspacesWithStats]
+  );
+
+  const {
+    unlinkWorkspace: handleUnlinkWorkspace,
+    archiveWorkspace: handleArchiveWorkspace,
+    deleteWorkspace,
+  } = useWorkspaceActions({ localWorkspacesById, findWorkspace });
+
+  const handleDeleteWorkspace = useCallback(
+    (localWorkspaceId: string) =>
+      deleteWorkspace(localWorkspaceId, getIssue(issueId)?.simple_id),
+    [deleteWorkspace, getIssue, issueId]
+  );
+
   const isLoading = projectLoading || orgLoading;
   const shouldAnimateCreateButton = useMemo(() => {
     if (issues.length !== 1) {
@@ -207,120 +226,6 @@ export function IssueWorkspacesSectionContainer({
       }
     },
     [projectId, issueId, appNavigation]
-  );
-
-  // Handle unlinking a workspace from the issue
-  const handleUnlinkWorkspace = useCallback(
-    async (localWorkspaceId: string) => {
-      const result = await ConfirmDialog.show({
-        title: t('workspaces.unlinkFromIssue'),
-        message: t('workspaces.unlinkConfirmMessage'),
-        confirmText: t('workspaces.unlink'),
-        variant: 'destructive',
-      });
-
-      if (result === 'confirmed') {
-        try {
-          await workspacesApi.unlinkFromIssue(localWorkspaceId);
-        } catch (error) {
-          ConfirmDialog.show({
-            title: t('common:error'),
-            message:
-              error instanceof Error
-                ? error.message
-                : t('workspaces.unlinkError'),
-            confirmText: t('common:ok'),
-            showCancelButton: false,
-          });
-        }
-      }
-    },
-    [t]
-  );
-
-  // Handle deleting a workspace (unlinks first, then deletes local)
-  const handleDeleteWorkspace = useCallback(
-    async (localWorkspaceId: string) => {
-      const localWorkspace = localWorkspacesById.get(localWorkspaceId);
-      if (!localWorkspace) {
-        ConfirmDialog.show({
-          title: t('common:error'),
-          message: t('workspaces.deleteError'),
-          confirmText: t('common:ok'),
-          showCancelButton: false,
-        });
-        return;
-      }
-
-      const result = await DeleteWorkspaceDialog.show({
-        branchName: localWorkspace.branch,
-        hasOpenPR:
-          workspacesWithStats
-            .find(
-              (workspace) => workspace.localWorkspaceId === localWorkspaceId
-            )
-            ?.prs.some((pr) => pr.status === 'open') ?? false,
-        isLinkedToIssue: true,
-        linkedIssueSimpleId: getIssue(issueId)?.simple_id,
-      });
-
-      if (result.action !== 'confirmed') {
-        return;
-      }
-
-      try {
-        // Delete local workspace first
-        await workspacesApi.delete(localWorkspaceId, result.deleteBranches);
-        // Unlink from remote after successful deletion
-        if (result.unlinkFromIssue) {
-          await workspacesApi.unlinkFromIssue(localWorkspaceId);
-        }
-      } catch (error) {
-        ConfirmDialog.show({
-          title: t('common:error'),
-          message:
-            error instanceof Error
-              ? error.message
-              : t('workspaces.deleteError'),
-          confirmText: t('common:ok'),
-          showCancelButton: false,
-        });
-      }
-    },
-    [localWorkspacesById, workspacesWithStats, t, issueId, getIssue]
-  );
-
-  // Handle archiving/unarchiving a workspace
-  const handleArchiveWorkspace = useCallback(
-    async (localWorkspaceId: string) => {
-      const isCurrentlyArchived =
-        workspacesWithStats.find(
-          (ws) => ws.localWorkspaceId === localWorkspaceId
-        )?.archived ?? false;
-
-      try {
-        await workspacesApi.update(localWorkspaceId, {
-          archived: !isCurrentlyArchived,
-        });
-        queryClient.invalidateQueries({
-          queryKey: workspaceKeys.all,
-        });
-        queryClient.invalidateQueries({
-          queryKey: workspaceSummaryKeys.all,
-        });
-      } catch (error) {
-        ConfirmDialog.show({
-          title: t('common:error'),
-          message:
-            error instanceof Error
-              ? error.message
-              : t('workspaces.archiveError', 'Failed to update workspace'),
-          confirmText: t('common:ok'),
-          showCancelButton: false,
-        });
-      }
-    },
-    [workspacesWithStats, queryClient, t]
   );
 
   // Actions for the section header

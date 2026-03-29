@@ -30,27 +30,35 @@ git fetch upstream main
 git fetch origin
 ```
 
-### 2. Identify commits on origin/main not on upstream/main
+### 2. Create a backup branch
+
+Push a backup of the current `origin/main` so we can recover if the rebase breaks:
+
+```
+git push origin origin/main:refs/heads/rebase-backup-$(date -u +%Y%m%d-%H%M) --no-verify
+```
+
+### 3. Identify commits on origin/main not on upstream/main
 
 ```
 git log --oneline origin/main --not upstream/main
 ```
 
-### 3. Find open upstream PRs by yonch
+### 4. Find open upstream PRs by yonch
 
 ```
 gh api "search/issues?q=author:yonch+repo:BloopAI/vibe-kanban+type:pr+state:open&per_page=50" \
   --jq '.items[] | "\(.number)\t\(.title)\t\(.html_url)"'
 ```
 
-### 4. Match commits to branches
+### 5. Match commits to branches
 
-For each commit from step 2, determine which branch it belongs to:
+For each commit from step 3, determine which branch it belongs to:
 - Check fork-only branches listed above
 - Check open upstream PR branches (the PR head ref names)
 - Match by commit message, author, or by checking `git branch -r --contains <sha>`
 
-### 5. Handle unmatched commits
+### 6. Handle unmatched commits
 
 For any commit that does NOT belong to a known fork-only branch or upstream PR branch:
 
@@ -68,7 +76,7 @@ For any commit that does NOT belong to a known fork-only branch or upstream PR b
      - **Description**: a short summary of what the change does
   6. Wait for the user to confirm they opened the PR before continuing.
 
-### 6. Rebase each branch onto upstream/main
+### 7. Rebase each branch onto upstream/main
 
 For every branch (fork-only and PR branches):
 
@@ -102,13 +110,13 @@ if ! git diff --quiet upstream/main -- '**/Cargo.toml' 'Cargo.toml'; then
 fi
 ```
 
-### 7. Push all rebased branches
+### 8. Push all rebased branches
 
 ```
 git push origin <branch1> <branch2> ... --force-with-lease
 ```
 
-### 8. Rebuild origin/main
+### 9. Rebuild origin/main
 
 Cherry-pick in this order: **fork-only first, then PR branches**.
 
@@ -125,13 +133,13 @@ git cherry-pick <pr-branch-2>~N..<pr-branch-2>
 ...
 ```
 
-### 9. Push rebuilt main
+### 10. Push rebuilt main
 
 ```
 git push origin main --force-with-lease
 ```
 
-### 10. Verify
+### 11. Verify
 
 ```
 git log --oneline main --not upstream/main
@@ -142,7 +150,7 @@ Confirm the commit count matches expectations (sum of all branch commits, no fix
 ## When upstream merges a PR
 
 If a PR branch has been merged upstream, its commits will already be in `upstream/main`.
-Simply remove it from the cherry-pick sequence in step 8. The branch can be deleted:
+Simply remove it from the cherry-pick sequence in step 9. The branch can be deleted:
 
 ```
 git push origin --delete <branch-name>

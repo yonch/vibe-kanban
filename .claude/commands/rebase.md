@@ -14,10 +14,11 @@ Our `origin/main` is composed of:
 
 These branches contain commits that are private to this fork:
 
-- `auto/2d45-the-vibe-kanban` — GHCR build workflow (yonch-specific CI)
 - `auto/cd36-latency-launchin` — Latency instrumentation for executor launch path
 - `vk/rebase-skill` — /rebase skill for maintaining fork on top of upstream
 - `vk/address-reviews` — /address-reviews skill for triaging BugBot PR comments
+- `vk/conversation-race-conditions` — Fix conversation race conditions when switching workspaces
+- `vk/local-build-gtk-fix` — Build only needed binaries to avoid GTK dependency
 
 ## Procedure
 
@@ -30,27 +31,35 @@ git fetch upstream main
 git fetch origin
 ```
 
-### 2. Identify commits on origin/main not on upstream/main
+### 2. Create a backup branch
+
+Push a backup of the current `origin/main` so we can recover if the rebase breaks:
+
+```
+git push origin origin/main:refs/heads/rebase-backup-$(date -u +%Y%m%d-%H%M) --no-verify
+```
+
+### 3. Identify commits on origin/main not on upstream/main
 
 ```
 git log --oneline origin/main --not upstream/main
 ```
 
-### 3. Find open upstream PRs by yonch
+### 4. Find open upstream PRs by yonch
 
 ```
 gh api "search/issues?q=author:yonch+repo:BloopAI/vibe-kanban+type:pr+state:open&per_page=50" \
   --jq '.items[] | "\(.number)\t\(.title)\t\(.html_url)"'
 ```
 
-### 4. Match commits to branches
+### 5. Match commits to branches
 
-For each commit from step 2, determine which branch it belongs to:
+For each commit from step 3, determine which branch it belongs to:
 - Check fork-only branches listed above
 - Check open upstream PR branches (the PR head ref names)
 - Match by commit message, author, or by checking `git branch -r --contains <sha>`
 
-### 5. Handle unmatched commits
+### 6. Handle unmatched commits
 
 For any commit that does NOT belong to a known fork-only branch or upstream PR branch:
 
@@ -68,7 +77,7 @@ For any commit that does NOT belong to a known fork-only branch or upstream PR b
      - **Description**: a short summary of what the change does
   6. Wait for the user to confirm they opened the PR before continuing.
 
-### 6. Rebase each branch onto upstream/main
+### 7. Rebase each branch onto upstream/main
 
 For every branch (fork-only and PR branches):
 
@@ -102,13 +111,13 @@ if ! git diff --quiet upstream/main -- '**/Cargo.toml' 'Cargo.toml'; then
 fi
 ```
 
-### 7. Push all rebased branches
+### 8. Push all rebased branches
 
 ```
 git push origin <branch1> <branch2> ... --force-with-lease
 ```
 
-### 8. Rebuild origin/main
+### 9. Rebuild origin/main
 
 Cherry-pick in this order: **fork-only first, then PR branches**.
 
@@ -125,13 +134,44 @@ git cherry-pick <pr-branch-2>~N..<pr-branch-2>
 ...
 ```
 
-### 9. Push rebuilt main
+### 10. Verify locally
+
+Before pushing, run the TypeScript type check to catch import/conflict resolution errors:
+
+```
+pnpm i && pnpm -C packages/web-core run check
+```
+
+If it fails, fix the issues (usually stale imports from cherry-pick conflict resolution), commit the fix on `main`, and re-check.
+
+### 11. Push rebuilt main
 
 ```
 git push origin main --force-with-lease
 ```
 
-### 10. Verify
+### 12. Verify remote builds
+
+Pushing to `origin/main` automatically triggers Argo CI workflows via GitHub webhook:
+- `vk-remote-image` — builds the remote (cloud) container from `crates/remote/Dockerfile`
+
+Monitor the build:
+
+```
+# Wait for the workflow to appear (may take a few seconds after push)
+kubectl get workflows -n dev --sort-by=.metadata.creationTimestamp | tail -5
+
+# Watch logs of the latest vk-remote-image workflow
+argo logs -n dev -f $(kubectl get workflows -n dev --sort-by=.metadata.creationTimestamp \
+  -o jsonpath='{.items[-1].metadata.name}' -l workflows.argoproj.io/workflow-template=vk-remote-image)
+```
+
+If the remote build fails:
+- Check logs: `argo logs -n dev <workflow-name>`
+- Common causes: import conflicts from cherry-pick ordering, missing re-exports between branches
+- Fix on `main`, re-push (this will trigger a new build automatically)
+
+### 13. Verify commit count
 
 ```
 git log --oneline main --not upstream/main
@@ -142,7 +182,7 @@ Confirm the commit count matches expectations (sum of all branch commits, no fix
 ## When upstream merges a PR
 
 If a PR branch has been merged upstream, its commits will already be in `upstream/main`.
-Simply remove it from the cherry-pick sequence in step 8. The branch can be deleted:
+Simply remove it from the cherry-pick sequence in step 9. The branch can be deleted:
 
 ```
 git push origin --delete <branch-name>

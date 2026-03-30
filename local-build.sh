@@ -54,8 +54,7 @@ echo "🔨 Building web app..."
 (cd packages/local-web && npm run build)
 
 echo "🔨 Building Rust binaries..."
-cargo build --release --manifest-path Cargo.toml
-cargo build --release --bin vibe-kanban-mcp --manifest-path Cargo.toml
+cargo build --release --bin server --bin vibe-kanban-mcp --bin review --manifest-path Cargo.toml
 
 echo "📦 Creating distribution package..."
 

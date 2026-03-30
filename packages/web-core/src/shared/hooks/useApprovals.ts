@@ -1,4 +1,5 @@
 import { useCallback, useMemo } from 'react';
+
 import type { ApprovalInfo } from 'shared/types';
 import { useJsonPatchWsStream } from './useJsonPatchWsStream';
 
@@ -14,10 +15,12 @@ type ApprovalState = {
 };
 
 export function useApprovals(): UseApprovalsResult {
+  const initialData = useCallback((): ApprovalState => ({ pending: {} }), []);
+
   const { data, isConnected } = useJsonPatchWsStream<ApprovalState>(
     '/api/approvals/stream/ws',
     true,
-    () => ({ pending: {} })
+    initialData
   );
 
   const pendingById = useMemo(() => data?.pending ?? {}, [data?.pending]);

@@ -51,9 +51,13 @@ export const useConversationHistory = ({
   // Track active stream controllers for running processes so we can close them
   // when the scope changes, preventing stale callbacks from leaking old data.
   const runningControllersRef = useRef<Set<{ close(): void }>>(new Set());
-  // Scope token rotated on every scope change; async callbacks compare against
-  // the current token to detect staleness.
+  // Scope token: an opaque object reference rotated on every scope change.
+  // Async callbacks capture the token at creation time and call
+  // isActiveScopeToken() to detect if they've been orphaned by a scope switch.
   const scopeTokenRef = useRef<Record<string, never>>({});
+  const getActiveScopeToken = () => scopeTokenRef.current;
+  const isActiveScopeToken = (token: Record<string, never>) =>
+    token === scopeTokenRef.current;
   const [isLoadingHistoryState, setIsLoadingHistory] = useState(false);
 
   // Derive whether this is the first turn (no follow-up processes exist)
@@ -215,7 +219,7 @@ export const useConversationHistory = ({
   // This emits its own events as they are streamed
   const loadRunningAndEmit = useCallback(
     (executionProcess: ExecutionProcess): Promise<void> => {
-      const token = scopeTokenRef.current;
+      const token = getActiveScopeToken();
       return new Promise((resolve, reject) => {
         let url = '';
         if (executionProcess.executor_action.typ.type === 'ScriptRequest') {
@@ -225,7 +229,7 @@ export const useConversationHistory = ({
         }
         const controller = streamJsonPatchEntries<PatchType>(url, {
           onEntries(entries) {
-            if (token !== scopeTokenRef.current) return;
+            if (!isActiveScopeToken(token)) return;
             const patchesWithKey = entries.map((entry, index) =>
               patchWithKey(entry, executionProcess.id, index)
             );
@@ -239,7 +243,7 @@ export const useConversationHistory = ({
           },
           onFinished: () => {
             runningControllersRef.current.delete(controller);
-            if (token === scopeTokenRef.current) {
+            if (isActiveScopeToken(token)) {
               emitEntries(
                 displayedExecutionProcesses.current,
                 'running',
@@ -264,14 +268,14 @@ export const useConversationHistory = ({
   // Sometimes it can take a few seconds for the stream to start, wrap the loadRunningAndEmit method
   const loadRunningAndEmitWithBackoff = useCallback(
     async (executionProcess: ExecutionProcess) => {
-      const token = scopeTokenRef.current;
+      const token = getActiveScopeToken();
       for (let i = 0; i < 20; i++) {
-        if (token !== scopeTokenRef.current) break;
+        if (!isActiveScopeToken(token)) break;
         try {
           await loadRunningAndEmit(executionProcess);
           break;
         } catch (_) {
-          if (token !== scopeTokenRef.current) break;
+          if (!isActiveScopeToken(token)) break;
           await new Promise((resolve) => setTimeout(resolve, 500));
         }
       }
@@ -284,7 +288,7 @@ export const useConversationHistory = ({
       const localDisplayedExecutionProcesses: ExecutionProcessStateStore = {};
 
       if (!executionProcesses?.current) return localDisplayedExecutionProcesses;
-      const token = scopeTokenRef.current;
+      const token = getActiveScopeToken();
 
       for (const executionProcess of [
         ...executionProcesses.current,
@@ -294,7 +298,7 @@ export const useConversationHistory = ({
 
         const entries =
           await loadEntriesForHistoricExecutionProcess(executionProcess);
-        if (token !== scopeTokenRef.current)
+        if (!isActiveScopeToken(token))
           return localDisplayedExecutionProcesses;
         const entriesWithKey = entries.map((e, idx) =>
           patchWithKey(e, executionProcess.id, idx)
@@ -321,7 +325,7 @@ export const useConversationHistory = ({
   const loadRemainingEntriesInBatches = useCallback(
     async (batchSize: number): Promise<boolean> => {
       if (!executionProcesses?.current) return false;
-      const token = scopeTokenRef.current;
+      const token = getActiveScopeToken();
 
       let anyUpdated = false;
       for (const executionProcess of [
@@ -336,7 +340,7 @@ export const useConversationHistory = ({
 
         const entries =
           await loadEntriesForHistoricExecutionProcess(executionProcess);
-        if (token !== scopeTokenRef.current) return false;
+        if (!isActiveScopeToken(token)) return false;
         const entriesWithKey = entries.map((e, idx) =>
           patchWithKey(e, executionProcess.id, idx)
         );
@@ -510,7 +514,7 @@ export const useConversationHistory = ({
 
   useEffect(() => {
     if (!executionProcessesRaw) return;
-    const token = scopeTokenRef.current;
+    const token = getActiveScopeToken();
 
     const processesToReload: ExecutionProcess[] = [];
 
@@ -535,9 +539,9 @@ export const useConversationHistory = ({
       let anyUpdated = false;
 
       for (const process of processesToReload) {
-        if (token !== scopeTokenRef.current) return;
+        if (!isActiveScopeToken(token)) return;
         const entries = await loadEntriesForHistoricExecutionProcess(process);
-        if (token !== scopeTokenRef.current) return;
+        if (!isActiveScopeToken(token)) return;
         if (entries.length === 0) continue;
 
         const entriesWithKey = entries.map((e, idx) =>
@@ -553,7 +557,7 @@ export const useConversationHistory = ({
         anyUpdated = true;
       }
 
-      if (anyUpdated && token === scopeTokenRef.current) {
+      if (anyUpdated && isActiveScopeToken(token)) {
         emitEntries(displayedExecutionProcesses.current, 'running', false);
       }
     })();

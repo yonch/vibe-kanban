@@ -284,6 +284,7 @@ export const useConversationHistory = ({
       const localDisplayedExecutionProcesses: ExecutionProcessStateStore = {};
 
       if (!executionProcesses?.current) return localDisplayedExecutionProcesses;
+      const token = scopeTokenRef.current;
 
       for (const executionProcess of [
         ...executionProcesses.current,
@@ -293,6 +294,8 @@ export const useConversationHistory = ({
 
         const entries =
           await loadEntriesForHistoricExecutionProcess(executionProcess);
+        if (token !== scopeTokenRef.current)
+          return localDisplayedExecutionProcesses;
         const entriesWithKey = entries.map((e, idx) =>
           patchWithKey(e, executionProcess.id, idx)
         );
@@ -318,6 +321,7 @@ export const useConversationHistory = ({
   const loadRemainingEntriesInBatches = useCallback(
     async (batchSize: number): Promise<boolean> => {
       if (!executionProcesses?.current) return false;
+      const token = scopeTokenRef.current;
 
       let anyUpdated = false;
       for (const executionProcess of [
@@ -332,6 +336,7 @@ export const useConversationHistory = ({
 
         const entries =
           await loadEntriesForHistoricExecutionProcess(executionProcess);
+        if (token !== scopeTokenRef.current) return false;
         const entriesWithKey = entries.map((e, idx) =>
           patchWithKey(e, executionProcess.id, idx)
         );

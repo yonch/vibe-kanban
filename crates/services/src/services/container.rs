@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     path::{Path, PathBuf},
     sync::Arc,
+    time::Duration,
 };
 
 use anyhow::{Error as AnyhowError, anyhow};
@@ -836,6 +837,9 @@ pub trait ContainerService {
             Some(
                 store
                     .history_plus_stream() // BoxStream<Result<LogMsg, io::Error>>
+                    // Terminate on Finished so we don't block waiting for the
+                    // broadcast Sender to drop (races with MsgStore cleanup).
+                    .take_while(|msg| future::ready(!matches!(msg, Ok(LogMsg::Finished))))
                     .filter(|msg| future::ready(matches!(msg, Ok(LogMsg::JsonPatch(..)))))
                     .chain(futures::stream::once(async {
                         Ok::<_, std::io::Error>(LogMsg::Finished)
@@ -976,9 +980,21 @@ pub trait ContainerService {
             // stream knows when to flush its buffer and terminate.
             {
                 let store = temp_store.clone();
+                let exec_id = *id;
                 tokio::spawn(async move {
-                    for handle in handles {
-                        let _ = handle.await;
+                    let normalize_fut = async {
+                        for handle in handles {
+                            let _ = handle.await;
+                        }
+                    };
+                    if tokio::time::timeout(Duration::from_secs(5), normalize_fut)
+                        .await
+                        .is_err()
+                    {
+                        tracing::error!(
+                            execution_process_id = %exec_id,
+                            "Log normalization timed out after 5s, sending Ready with partial data"
+                        );
                     }
                     store.push(LogMsg::Ready);
                 });

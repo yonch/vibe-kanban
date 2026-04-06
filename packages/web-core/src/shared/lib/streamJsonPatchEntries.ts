@@ -45,6 +45,7 @@ export function streamJsonPatchEntries<E = unknown>(
 ): StreamController<E> {
   let connected = false;
   let closed = false;
+  let finished = false;
   let ws: WebSocket | null = null;
   let snapshot: PatchContainer<E> = structuredClone(
     opts.initial ?? ({ entries: [] } as PatchContainer<E>)
@@ -95,6 +96,7 @@ export function streamJsonPatchEntries<E = unknown>(
 
       // Handle Finished messages — flush synchronously before closing
       if (msg.finished !== undefined) {
+        finished = true;
         if (rafId !== null) {
           cancelAnimationFrame(rafId);
         }
@@ -129,11 +131,22 @@ export function streamJsonPatchEntries<E = unknown>(
         opts.onError?.(err);
       });
 
-      ws.addEventListener('close', () => {
+      ws.addEventListener('close', (event) => {
         connected = false;
         if (rafId !== null) {
           cancelAnimationFrame(rafId);
           rafId = null;
+        }
+        // If stream closed without a Finished message, treat as error so
+        // callers (e.g. loadEntriesForHistoricExecutionProcess) don't hang.
+        if (!finished && !closed) {
+          console.warn(
+            `[streamJsonPatchEntries] WebSocket closed without Finished message` +
+              ` (code=${event.code}, url=${url})`
+          );
+          opts.onError?.(
+            new Error(`WebSocket closed without Finished (code=${event.code})`)
+          );
         }
       });
     } catch (error) {

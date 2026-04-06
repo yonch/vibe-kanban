@@ -4,8 +4,8 @@ import {
   GitPullRequestIcon,
   DotsThreeIcon,
   LinkBreakIcon,
-  TrashIcon,
   ArchiveIcon,
+  TrashIcon,
   PlayIcon,
   HandIcon,
   TriangleIcon,
@@ -203,8 +203,8 @@ export function IssueWorkspaceCard({
                   >
                     <ArchiveIcon className="size-icon-xs" />
                     {workspace.archived
-                      ? t('workspaces.unarchive')
-                      : t('workspaces.archive')}
+                      ? t('workspaces.unarchive', 'Unarchive')
+                      : t('workspaces.archive', 'Archive')}
                   </DropdownMenuItem>
                 )}
                 {onDelete && (

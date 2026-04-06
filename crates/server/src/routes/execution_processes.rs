@@ -149,11 +149,18 @@ async fn stream_normalized_logs_ws(
         match stream {
             Some(stream) => {
                 let stream = stream.err_into::<anyhow::Error>().into_stream();
-                if let Err(e) = handle_normalized_logs_ws(socket, stream).await {
-                    tracing::warn!("normalized logs WS closed: {}", e);
+                if let Err(e) = handle_normalized_logs_ws(socket, stream, exec_id).await {
+                    tracing::warn!(
+                        execution_process_id = %exec_id,
+                        "normalized logs WS closed: {}", e
+                    );
                 }
             }
             None => {
+                tracing::debug!(
+                    execution_process_id = %exec_id,
+                    "No normalized logs available, sending Finished"
+                );
                 // No logs available: send finished and close cleanly
                 let mut socket = socket;
                 let _ = socket
@@ -168,19 +175,34 @@ async fn stream_normalized_logs_ws(
 async fn handle_normalized_logs_ws(
     mut socket: MaybeSignedWebSocket,
     stream: impl futures_util::Stream<Item = anyhow::Result<LogMsg>> + Unpin + Send + 'static,
+    exec_id: Uuid,
 ) -> anyhow::Result<()> {
     let mut stream = stream.map_ok(|msg| msg.to_ws_message_unchecked());
+    let mut sent_finished = false;
     loop {
         tokio::select! {
             item = stream.next() => {
                 match item {
                     Some(Ok(msg)) => {
+                        // Track if the last message we're sending is Finished
+                        if let Message::Text(ref text) = msg {
+                            if text.contains("\"finished\"") {
+                                sent_finished = true;
+                            }
+                        }
                         if socket.send(msg).await.is_err() {
+                            tracing::warn!(
+                                execution_process_id = %exec_id,
+                                "normalized logs WS: client disconnected during send"
+                            );
                             break;
                         }
                     }
                     Some(Err(e)) => {
-                        tracing::error!("stream error: {}", e);
+                        tracing::error!(
+                            execution_process_id = %exec_id,
+                            "normalized logs stream error: {}", e
+                        );
                         break;
                     }
                     None => break,
@@ -188,13 +210,31 @@ async fn handle_normalized_logs_ws(
             }
             inbound = socket.recv() => {
                 match inbound {
-                    Ok(Some(Message::Close(_))) => break,
+                    Ok(Some(Message::Close(_))) => {
+                        tracing::debug!(
+                            execution_process_id = %exec_id,
+                            "normalized logs WS: client sent Close frame"
+                        );
+                        break;
+                    }
                     Ok(Some(_)) => {}
                     Ok(None) => break,
-                    Err(_) => break,
+                    Err(e) => {
+                        tracing::warn!(
+                            execution_process_id = %exec_id,
+                            "normalized logs WS: inbound error (likely network drop): {}", e
+                        );
+                        break;
+                    }
                 }
             }
         }
+    }
+    if !sent_finished {
+        tracing::warn!(
+            execution_process_id = %exec_id,
+            "normalized logs WS: stream ended without sending Finished"
+        );
     }
     let _ = socket.close().await;
     Ok(())

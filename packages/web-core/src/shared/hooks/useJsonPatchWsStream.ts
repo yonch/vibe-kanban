@@ -183,6 +183,13 @@ export const useJsonPatchWsStream = <T extends object>(
               return;
             }
 
+            // Log unexpected closure for debugging network drops
+            console.warn(
+              `[useJsonPatchWsStream] Unexpected WebSocket close` +
+                ` (code=${evt?.code}, wasClean=${evt?.wasClean},` +
+                ` endpoint=${endpoint})`
+            );
+
             // Otherwise, reconnect on unexpected/error closures
             retryAttemptsRef.current += 1;
             // Only show error if we haven't received any data yet

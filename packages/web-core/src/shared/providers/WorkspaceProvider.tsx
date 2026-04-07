@@ -102,7 +102,9 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
     [diffs]
   );
 
-  const isLoading = isLoadingList || isLoadingWorkspace;
+  // Keep the main workspace view responsive even if the sidebar list streams
+  // are still reconnecting. The sidebar has its own loading state.
+  const isLoading = !isCreateMode && !!workspaceId ? isLoadingWorkspace : false;
 
   useEffect(() => {
     if (!workspaceId || isCreateMode) return;

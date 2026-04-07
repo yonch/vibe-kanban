@@ -156,22 +156,65 @@ function WorkspaceSessionPanel({
   const { projectId, getIssue } = useProjectContext();
   const routeState = useCurrentKanbanRouteState();
   const { workspaces: remoteWorkspaces } = useUserContext();
-  const { activeWorkspaces, archivedWorkspaces } = useWorkspaceContext();
+  const workspaceContext = useWorkspaceContext();
+  const {
+    workspaceId: contextWorkspaceId,
+    workspace: contextWorkspace,
+    isLoading: isContextWorkspaceLoading,
+    sessions: contextSessions,
+    selectedSession: contextSelectedSession,
+    selectedSessionId: contextSelectedSessionId,
+    selectSession: contextSelectSession,
+    isSessionsLoading: isContextSessionsLoading,
+    isNewSessionMode: isContextNewSessionMode,
+    startNewSession: contextStartNewSession,
+    activeWorkspaces,
+    archivedWorkspaces,
+  } = workspaceContext;
   const conversationListRef = useRef<ConversationListHandle>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
-  const { data: workspace, isLoading: isWorkspaceLoading } = useWorkspaceRecord(
-    workspaceId,
-    { enabled: !!workspaceId }
-  );
+  const isCurrentWorkspaceRoute = contextWorkspaceId === workspaceId;
+  const { data: fetchedWorkspace, isLoading: isFetchedWorkspaceLoading } =
+    useWorkspaceRecord(workspaceId, {
+      enabled: !!workspaceId && !isCurrentWorkspaceRoute,
+    });
   const {
-    sessions,
-    selectedSession,
-    selectedSessionId,
-    selectSession,
-    isLoading: isSessionsLoading,
-    isNewSessionMode,
-    startNewSession,
-  } = useWorkspaceSessions(workspaceId, { enabled: !!workspaceId });
+    sessions: fetchedSessions,
+    selectedSession: fetchedSelectedSession,
+    selectedSessionId: fetchedSelectedSessionId,
+    selectSession: selectFetchedSession,
+    isLoading: isFetchedSessionsLoading,
+    isNewSessionMode: isFetchedNewSessionMode,
+    startNewSession: startFetchedNewSession,
+  } = useWorkspaceSessions(workspaceId, {
+    enabled: !!workspaceId && !isCurrentWorkspaceRoute,
+  });
+
+  const workspace = isCurrentWorkspaceRoute
+    ? contextWorkspace
+    : fetchedWorkspace;
+  const isWorkspaceLoading = isCurrentWorkspaceRoute
+    ? isContextWorkspaceLoading
+    : isFetchedWorkspaceLoading;
+  const sessions = isCurrentWorkspaceRoute ? contextSessions : fetchedSessions;
+  const selectedSession = isCurrentWorkspaceRoute
+    ? contextSelectedSession
+    : fetchedSelectedSession;
+  const selectedSessionId = isCurrentWorkspaceRoute
+    ? contextSelectedSessionId
+    : fetchedSelectedSessionId;
+  const selectSession = isCurrentWorkspaceRoute
+    ? contextSelectSession
+    : selectFetchedSession;
+  const isSessionsLoading = isCurrentWorkspaceRoute
+    ? isContextSessionsLoading
+    : isFetchedSessionsLoading;
+  const isNewSessionMode = isCurrentWorkspaceRoute
+    ? isContextNewSessionMode
+    : isFetchedNewSessionMode;
+  const startNewSession = isCurrentWorkspaceRoute
+    ? contextStartNewSession
+    : startFetchedNewSession;
 
   const workspaceSummary = useMemo(
     () =>

@@ -9,7 +9,7 @@ use super::{McpMode, McpServer};
 #[tool_handler]
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerInfo {
-        let preamble = match self.mode() {
+        let description = match self.mode() {
             McpMode::Global => {
                 "A Vibe Kanban MCP server for task, issue, repository, workspace, and session management."
             }
@@ -17,20 +17,13 @@ impl ServerHandler for McpServer {
                 "An orchestrator-scoped Vibe Kanban MCP server with tools limited to the configured workspace and orchestrator session context."
             }
         };
-        let mut instruction = format!(
-            "{} Use list/read tools first when you need IDs or current state.",
-            preamble,
-        );
-        if self.context.is_some() {
-            instruction = format!(
-                "Use 'get_context' to fetch project, issue, workspace, and orchestrator-session metadata for the active MCP context when available. {}",
-                instruction
-            );
-        }
 
         ServerInfo::new(ServerCapabilities::builder().enable_tools().build())
-            .with_server_info(Implementation::new("vibe-kanban-mcp", "1.0.0"))
+            .with_server_info(
+                Implementation::new("vibe-kanban-mcp", "1.0.0")
+                    .with_description(description),
+            )
             .with_protocol_version(ProtocolVersion::V_2025_03_26)
-            .with_instructions(instruction)
+            .with_instructions("Use list/read tools first when you need IDs or current state.")
     }
 }

@@ -9,14 +9,6 @@ use super::{McpMode, McpServer};
 #[tool_handler]
 impl ServerHandler for McpServer {
     fn get_info(&self) -> ServerInfo {
-        let mut tool_names = self
-            .tool_router
-            .list_all()
-            .into_iter()
-            .map(|tool| format!("'{}'", tool.name))
-            .collect::<Vec<_>>();
-        tool_names.sort();
-
         let preamble = match self.mode() {
             McpMode::Global => {
                 "A Vibe Kanban MCP server for task, issue, repository, workspace, and session management."
@@ -26,9 +18,8 @@ impl ServerHandler for McpServer {
             }
         };
         let mut instruction = format!(
-            "{} Use list/read tools first when you need IDs or current state. TOOLS: {}.",
+            "{} Use list/read tools first when you need IDs or current state.",
             preamble,
-            tool_names.join(", ")
         );
         if self.context.is_some() {
             instruction = format!(

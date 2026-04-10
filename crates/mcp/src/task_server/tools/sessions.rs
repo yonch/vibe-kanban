@@ -352,10 +352,12 @@ impl McpServer {
 
         let final_message = if is_finished {
             let summary_url = self.url(&format!("/api/execution-processes/{execution_id}/summary"));
-            self.send_json::<ExecutionSummaryResponse>(self.client.get(&summary_url))
-                .await
-                .ok()
-                .and_then(|r| r.summary)
+            let resp: ExecutionSummaryResponse =
+                match self.send_json(self.client.get(&summary_url)).await {
+                    Ok(value) => value,
+                    Err(error_result) => return Ok(Self::tool_error(error_result)),
+                };
+            resp.summary
         } else {
             None
         };

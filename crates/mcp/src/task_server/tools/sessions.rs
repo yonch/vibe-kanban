@@ -298,7 +298,20 @@ impl McpServer {
             .await
         {
             Ok(value) => value,
-            Err(error_result) => return Ok(Self::tool_error(error_result)),
+            Err(error_result) => {
+                // Session was created but prompt failed. Return the session_id
+                // so callers can retry with run_session_prompt instead of
+                // accumulating orphaned sessions.
+                let mut err = Self::tool_error(error_result);
+                err.content.push(rmcp::model::Content::text(
+                    serde_json::json!({
+                        "session_id": session_id.to_string(),
+                        "note": "Session was created but the prompt failed to start. Use run_session_prompt with this session_id to retry."
+                    })
+                    .to_string(),
+                ));
+                return Ok(err);
+            }
         };
 
         let execution_id = execution_process.id.to_string();

@@ -125,7 +125,7 @@ export function IssueWorkspacesSectionContainer({
 
   const {
     unlinkWorkspace: handleUnlinkWorkspace,
-    archiveWorkspace: handleArchiveWorkspace,
+    archiveWorkspace: _handleArchiveWorkspace,
     deleteWorkspace,
   } = useWorkspaceActions({ localWorkspacesById, findWorkspace });
 

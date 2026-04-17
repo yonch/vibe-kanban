@@ -346,7 +346,7 @@ export function NavbarContainer({
       onNavigateToBoard={handleNavigateToBoard}
       onOpenDrawer={onOpenDrawer}
       onArchive={
-        mobileMode && selectedWorkspace && !isCreateMode && !isMigratePage
+        mobileMode && selectedWorkspace && !isCreateMode
           ? handleArchive
           : undefined
       }

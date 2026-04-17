@@ -19,6 +19,7 @@ These branches contain commits that are private to this fork:
 - `vk/address-reviews` — /address-reviews skill for triaging BugBot PR comments
 - `vk/conversation-race-conditions` — Fix conversation race conditions when switching workspaces
 - `vk/local-build-gtk-fix` — Build only needed binaries to avoid GTK dependency
+- `vk/fork-mcp-cleanup` — Remove TOOLS enumeration from MCP instructions, add .claude/skills to .gitignore
 
 ## Procedure
 
@@ -58,6 +59,10 @@ For each commit from step 3, determine which branch it belongs to:
 - Check fork-only branches listed above
 - Check open upstream PR branches (the PR head ref names)
 - Match by commit message, author, or by checking `git branch -r --contains <sha>`
+
+Note: A commit on `origin/main` may not be at the tip of its branch — branches may have
+additional commits that were not yet cherry-picked onto main. This is fine; step 9 will
+cherry-pick **all** commits from the branch (including new ones).
 
 ### 6. Handle unmatched commits
 
@@ -121,17 +126,22 @@ git push origin <branch1> <branch2> ... --force-with-lease
 
 Cherry-pick in this order: **fork-only first, then PR branches**.
 
+**IMPORTANT: Cherry-pick the same branches that were on `origin/main` before the rebase.**
+Do NOT add new branches/PRs that weren't already represented on main — only the user can
+decide to add those. However, DO include all commits from each branch (including new commits
+added to the branch since the last rebase). Never drop commits from a branch unless the user
+explicitly requests it.
+
+Use the backup branch from step 2 to identify which branches had commits on the old main.
+
 ```
 git checkout -B main upstream/main
 
-# Fork-only
-git cherry-pick <fork-only-branch-1>~N..<fork-only-branch-1>
-git cherry-pick <fork-only-branch-2>~N..<fork-only-branch-2>
+# Fork-only (all commits from each branch)
+git cherry-pick upstream/main..<fork-only-branch>
 
-# PR branches (in chronological order of PR number)
-git cherry-pick <pr-branch-1>~N..<pr-branch-1>
-git cherry-pick <pr-branch-2>~N..<pr-branch-2>
-...
+# PR branches (all commits, in chronological order of PR number)
+git cherry-pick upstream/main..<pr-branch>
 ```
 
 ### 10. Verify locally

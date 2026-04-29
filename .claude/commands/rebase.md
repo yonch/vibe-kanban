@@ -21,6 +21,22 @@ These branches contain commits that are private to this fork:
 - `vk/local-build-gtk-fix` — Build only needed binaries to avoid GTK dependency
 - `vk/fork-mcp-cleanup` — Remove TOOLS enumeration from MCP instructions, add .claude/skills to .gitignore
 
+## Upstream commits to revert
+
+These upstream commits degrade functionality. They originate on `upstream/main` (not on
+any of our branches), so the only action needed is to revert them on `main` after step 9,
+before step 11's push.
+
+- `97123d5262091deca5e4eba7167164e21329db36` (upstream PR #3387) — degrades functionality
+
+For each SHA listed above, if it is reachable from `upstream/main`, run:
+
+```
+git revert --no-edit <sha>
+```
+
+Use a clear commit message (e.g. `revert: upstream <short-sha> (PR #N) — <reason>`).
+
 ## Procedure
 
 Execute these steps in order:

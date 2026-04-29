@@ -30,10 +30,14 @@ const PORT_ENV: &str = "MCP_PORT";
 const HTTP_HOST_ENV: &str = "VIBE_KANBAN_MCP_HTTP_HOST";
 const HTTP_PORT_ENV: &str = "VIBE_KANBAN_MCP_HTTP_PORT";
 const HTTP_TOKEN_ENV: &str = "VIBE_KANBAN_MCP_HTTP_TOKEN";
+const HTTP_ALLOW_UNAUTH_ENV: &str = "VIBE_KANBAN_MCP_HTTP_ALLOW_UNAUTHENTICATED";
 const TRANSPORT_ENV: &str = "VIBE_KANBAN_MCP_TRANSPORT";
 
 const DEFAULT_HTTP_HOST: &str = "127.0.0.1";
 const DEFAULT_HTTP_PORT: u16 = 4096;
+/// Idle session TTL for the streamable-HTTP `LocalSessionManager`. Without
+/// this, abandoned sessions accumulate in memory until the process restarts.
+const HTTP_SESSION_IDLE_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(30 * 60);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum McpLaunchMode {
@@ -54,6 +58,10 @@ struct HttpConfig {
     token: Option<String>,
     stateless: bool,
     json_response: bool,
+    /// Allow binding a non-loopback host without a bearer token. Off by
+    /// default — operators must opt in explicitly when fronting the server
+    /// with their own auth (reverse proxy, mTLS tunnel, etc.).
+    allow_unauthenticated: bool,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -107,13 +115,23 @@ async fn serve_http(server: McpServer, config: HttpConfig) -> anyhow::Result<()>
         token,
         stateless,
         json_response,
+        allow_unauthenticated,
     } = config;
 
     if !host_is_loopback(&host) && token.is_none() {
+        if !allow_unauthenticated {
+            anyhow::bail!(
+                "Refusing to start: --http-host '{host}' is not loopback and --http-token is \
+                 unset. Provide --http-token (or {HTTP_TOKEN_ENV}), or pass \
+                 --allow-unauthenticated-http (or {HTTP_ALLOW_UNAUTH_ENV}=1) to confirm that an \
+                 external layer (reverse proxy, tunnel, mTLS) handles authentication."
+            );
+        }
         tracing::warn!(
             "vibe-kanban-mcp HTTP transport is binding to non-loopback address {host} without a \
-             token. Anyone who can reach this port can call MCP tools that mutate Vibe Kanban \
-             state. Set --http-token (or {HTTP_TOKEN_ENV}) or put a reverse proxy in front."
+             token because --allow-unauthenticated-http was set. Ensure an external layer \
+             enforces authentication; otherwise anyone who can reach this port can call MCP \
+             tools that mutate Vibe Kanban state."
         );
     }
 
@@ -124,9 +142,12 @@ async fn serve_http(server: McpServer, config: HttpConfig) -> anyhow::Result<()>
     http_config.json_response = json_response;
     http_config.cancellation_token = cancellation_token.child_token();
 
+    let mut session_manager = LocalSessionManager::default();
+    session_manager.session_config.keep_alive = Some(HTTP_SESSION_IDLE_TIMEOUT);
+
     let service = StreamableHttpService::new(
         move || Ok::<_, std::io::Error>(server.clone()),
-        Arc::new(LocalSessionManager::default()),
+        Arc::new(session_manager),
         http_config,
     );
 
@@ -213,6 +234,7 @@ where
     let mut http_token: Option<String> = std::env::var(HTTP_TOKEN_ENV).ok();
     let mut http_stateless = false;
     let mut http_json_response = false;
+    let mut http_allow_unauthenticated = env_truthy(HTTP_ALLOW_UNAUTH_ENV);
 
     while let Some(arg) = iter.next() {
         match arg.as_str() {
@@ -249,6 +271,9 @@ where
             }
             "--http-json" => {
                 http_json_response = true;
+            }
+            "--allow-unauthenticated-http" => {
+                http_allow_unauthenticated = true;
             }
             "-h" | "--help" => {
                 println!("{}", help_text());
@@ -301,6 +326,7 @@ where
                 token: http_token.filter(|t| !t.is_empty()),
                 stateless: http_stateless,
                 json_response: http_json_response,
+                allow_unauthenticated: http_allow_unauthenticated,
             })
         }
         value => {
@@ -316,7 +342,14 @@ where
 fn help_text() -> &'static str {
     "Usage: vibe-kanban-mcp [--mode <global|orchestrator>] [--transport <stdio|http>] \
      [--http-host <host>] [--http-port <port>] [--http-token <token>] [--http-stateless] \
-     [--http-json]"
+     [--http-json] [--allow-unauthenticated-http]"
+}
+
+fn env_truthy(name: &str) -> bool {
+    matches!(
+        std::env::var(name).ok().as_deref(),
+        Some("1" | "true" | "TRUE" | "True" | "yes" | "YES" | "Yes")
+    )
 }
 
 async fn resolve_base_url(log_prefix: &str) -> anyhow::Result<String> {
@@ -464,6 +497,7 @@ mod tests {
                     token: None,
                     stateless: false,
                     json_response: false,
+                    allow_unauthenticated: false,
                 }),
             }
         );
@@ -483,6 +517,7 @@ mod tests {
                 "secret",
                 "--http-stateless",
                 "--http-json",
+                "--allow-unauthenticated-http",
             ]
             .into_iter()
             .map(|s| s.to_string()),
@@ -499,6 +534,7 @@ mod tests {
                     token: Some("secret".to_string()),
                     stateless: true,
                     json_response: true,
+                    allow_unauthenticated: true,
                 }),
             }
         );
@@ -511,6 +547,29 @@ mod tests {
         )
         .expect_err("unknown transport should fail");
         assert!(error.to_string().contains("Invalid --transport"));
+    }
+
+    #[test]
+    fn http_allow_unauthenticated_flag_is_recorded() {
+        let config = resolve_launch_config_from_iter(
+            [
+                "--transport".to_string(),
+                "http".to_string(),
+                "--http-host".to_string(),
+                "0.0.0.0".to_string(),
+                "--allow-unauthenticated-http".to_string(),
+            ]
+            .into_iter(),
+        )
+        .expect("config should parse");
+
+        if let Transport::Http(http) = config.transport {
+            assert!(http.allow_unauthenticated);
+            assert!(http.token.is_none());
+            assert_eq!(http.host, "0.0.0.0");
+        } else {
+            panic!("expected http transport");
+        }
     }
 
     #[test]

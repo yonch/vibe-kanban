@@ -57,7 +57,9 @@ Add the following configuration to your agent's MCP servers configuration:
 The MCP server can also expose the [streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#streamable-http) so that clients on another machine, including Claude Desktop, can reach it without spawning a local binary. The same backend (`VIBE_BACKEND_URL` or the local port file) is used regardless of transport.
 
 <Warning>
-The HTTP transport exposes tools that mutate Vibe Kanban state. Bearer tokens travel in the request, so any non-loopback deployment **must** terminate TLS in front of the server (a reverse proxy with a valid certificate, an SSH/VPN tunnel, or an authenticated tunnel like Cloudflare Access). Sending bearer credentials over plain `http://` to a remote host leaks the token to anyone on the network path. For loopback-only use (`127.0.0.1`), plain HTTP is fine.
+The HTTP transport exposes tools that mutate Vibe Kanban state. To prevent accidental exposure, the server **refuses to start** when `--http-host` is not loopback and no `--http-token` is provided. If your deployment relies on an external auth layer (reverse proxy, mTLS tunnel, Cloudflare Access), pass `--allow-unauthenticated-http` to acknowledge the trade-off.
+
+Bearer tokens travel in the request, so any non-loopback deployment **must** terminate TLS in front of the server (a reverse proxy with a valid certificate, an SSH/VPN tunnel, or an authenticated tunnel). Sending bearer credentials over plain `http://` to a remote host leaks the token to anyone on the network path. For loopback-only use (`127.0.0.1`), plain HTTP is fine.
 </Warning>
 
 Start the server in HTTP mode:
@@ -76,10 +78,11 @@ npx vibe-kanban@latest --mcp \
 | `--http-host` | `127.0.0.1` | Address to bind. Accepts IPv4, IPv6 (e.g. `::1`), and hostnames such as `localhost`. Use `0.0.0.0` to accept remote connections. |
 | `--http-port` | `4096` | TCP port to bind. |
 | `--http-token` | _unset_ | If set, every request must include `Authorization: Bearer <token>`. |
+| `--allow-unauthenticated-http` | _off_ | Required to bind a non-loopback host without `--http-token`. Use only when an external auth layer (reverse proxy, mTLS tunnel, Cloudflare Access) fronts the server. |
 | `--http-stateless` | _off_ | Disable per-client sessions (single-shot request/response). |
 | `--http-json` | _off_ | Return `application/json` instead of SSE for stateless requests. |
 
-Each flag has a matching environment variable: `VIBE_KANBAN_MCP_TRANSPORT`, `VIBE_KANBAN_MCP_HTTP_HOST`, `VIBE_KANBAN_MCP_HTTP_PORT`, `VIBE_KANBAN_MCP_HTTP_TOKEN`.
+Each flag has a matching environment variable: `VIBE_KANBAN_MCP_TRANSPORT`, `VIBE_KANBAN_MCP_HTTP_HOST`, `VIBE_KANBAN_MCP_HTTP_PORT`, `VIBE_KANBAN_MCP_HTTP_TOKEN`, `VIBE_KANBAN_MCP_HTTP_ALLOW_UNAUTHENTICATED`.
 
 Point a remote client at the public TLS-terminated URL of your reverse proxy or tunnel. For example, in Claude Desktop:
 

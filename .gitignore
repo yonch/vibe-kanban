@@ -97,3 +97,4 @@ Caddyfile
 Caddyfile.dev
 
 .claude/skills
+.claude/scheduled_tasks.lock

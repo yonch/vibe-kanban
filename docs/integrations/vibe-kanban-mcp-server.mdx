@@ -10,7 +10,7 @@ This page covers connecting **external MCP clients** to Vibe Kanban's MCP server
 </Note>
 
 <Info>
-Vibe Kanban's MCP server is **local-only** - it runs on your computer and can only be accessed by applications installed locally. It cannot be accessed via publicly accessible URLs.
+By default, Vibe Kanban's MCP server runs over stdio on your computer and is only reachable by locally installed applications. It can also run as a [streamable HTTP server](#http-transport-remote-clients) for remote clients such as Claude Desktop pointed at another machine, but you are responsible for restricting network access (for example, via a bearer token or reverse proxy).
 </Info>
 
 <video
@@ -51,6 +51,50 @@ Add the following configuration to your agent's MCP servers configuration:
 ```
 
 `--mcp` launches the local MCP stdio server. Any additional arguments after `--mcp` are passed through to the `vibe-kanban-mcp` binary.
+
+## HTTP transport (remote clients)
+
+The MCP server can also expose the [streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#streamable-http) so that clients on another machine, including Claude Desktop, can reach it without spawning a local binary. The same backend (`VIBE_BACKEND_URL` or the local port file) is used regardless of transport.
+
+<Warning>
+The HTTP transport exposes tools that mutate Vibe Kanban state. Always set `--http-token` (or `VIBE_KANBAN_MCP_HTTP_TOKEN`) when binding to anything other than `127.0.0.1`, or place the server behind a reverse proxy that enforces authentication.
+</Warning>
+
+Start the server in HTTP mode:
+
+```bash
+npx vibe-kanban@latest --mcp \
+  --transport http \
+  --http-host 127.0.0.1 \
+  --http-port 4096 \
+  --http-token your-shared-secret
+```
+
+| Flag | Default | Purpose |
+|------|---------|---------|
+| `--transport` | `stdio` | `stdio` or `http`. |
+| `--http-host` | `127.0.0.1` | Address to bind. Use `0.0.0.0` to accept remote connections. |
+| `--http-port` | `4096` | TCP port to bind. |
+| `--http-token` | _unset_ | If set, every request must include `Authorization: Bearer <token>`. |
+| `--http-stateless` | _off_ | Disable per-client sessions (single-shot request/response). |
+| `--http-json` | _off_ | Return `application/json` instead of SSE for stateless requests. |
+
+Each flag has a matching environment variable: `VIBE_KANBAN_MCP_TRANSPORT`, `VIBE_KANBAN_MCP_HTTP_HOST`, `VIBE_KANBAN_MCP_HTTP_PORT`, `VIBE_KANBAN_MCP_HTTP_TOKEN`.
+
+Point a remote client at `http://<host>:<port>/mcp`. For example, in Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "vibe_kanban": {
+      "url": "http://your-host.example.com:4096/mcp",
+      "headers": {
+        "Authorization": "Bearer your-shared-secret"
+      }
+    }
+  }
+}
+```
 
 ## Available MCP Tools
 

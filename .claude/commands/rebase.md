@@ -21,6 +21,17 @@ These branches contain commits that are private to this fork:
 - `vk/local-build-gtk-fix` — Build only needed binaries to avoid GTK dependency
 - `vk/fork-mcp-cleanup` — Remove TOOLS enumeration from MCP instructions, add .claude/skills to .gitignore
 
+## Commits to exclude
+
+Never cherry-pick or include these upstream commits — they degrade functionality:
+
+- `97123d5262091deca5e4eba7167164e21329db36` (upstream PR #3387) — degrades functionality
+
+When rebasing any branch in step 7, if one of these commits appears in the branch history,
+drop it (e.g. via `git rebase --onto` or by skipping during interactive rebase). When
+cherry-picking in step 9, never include these SHAs. If `upstream/main` itself contains one
+of these commits, revert it on `main` after step 9 with a clearly-named revert commit.
+
 ## Procedure
 
 Execute these steps in order:

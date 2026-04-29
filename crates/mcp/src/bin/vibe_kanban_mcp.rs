@@ -109,11 +109,7 @@ async fn serve_http(server: McpServer, config: HttpConfig) -> anyhow::Result<()>
         json_response,
     } = config;
 
-    let parsed_host: IpAddr = host
-        .parse()
-        .map_err(|e| anyhow::anyhow!("Invalid --http-host '{host}': {e}"))?;
-
-    if !parsed_host.is_loopback() && token.is_none() {
+    if !host_is_loopback(&host) && token.is_none() {
         tracing::warn!(
             "vibe-kanban-mcp HTTP transport is binding to non-loopback address {host} without a \
              token. Anyone who can reach this port can call MCP tools that mutate Vibe Kanban \
@@ -143,8 +139,9 @@ async fn serve_http(server: McpServer, config: HttpConfig) -> anyhow::Result<()>
         }));
     }
 
-    let bind_addr = format!("{host}:{port}");
-    let listener = tokio::net::TcpListener::bind(&bind_addr).await?;
+    let listener = tokio::net::TcpListener::bind((host.as_str(), port))
+        .await
+        .map_err(|e| anyhow::anyhow!("Failed to bind {host}:{port}: {e}"))?;
     let local_addr = listener.local_addr()?;
     tracing::info!(
         "vibe-kanban-mcp HTTP transport listening on http://{local_addr}/mcp (stateful={}, \
@@ -161,6 +158,21 @@ async fn serve_http(server: McpServer, config: HttpConfig) -> anyhow::Result<()>
 
     serve.await?;
     Ok(())
+}
+
+/// Best-effort check for "this host name only resolves to loopback".
+///
+/// Used to decide whether to emit the unauthenticated-binding warning. We
+/// recognise IP literals via `IpAddr::is_loopback`, plus the conventional
+/// hostname `localhost`. Anything else (DNS names, `0.0.0.0`, etc.) is
+/// conservatively treated as non-loopback.
+fn host_is_loopback(host: &str) -> bool {
+    if host.eq_ignore_ascii_case("localhost") {
+        return true;
+    }
+    host.parse::<IpAddr>()
+        .map(|ip| ip.is_loopback())
+        .unwrap_or(false)
 }
 
 async fn require_bearer(
@@ -369,8 +381,22 @@ fn init_process_logging(log_prefix: &str, version: &str) {
 #[cfg(test)]
 mod tests {
     use super::{
-        HttpConfig, LaunchConfig, McpLaunchMode, Transport, resolve_launch_config_from_iter,
+        HttpConfig, LaunchConfig, McpLaunchMode, Transport, host_is_loopback,
+        resolve_launch_config_from_iter,
     };
+
+    #[test]
+    fn host_is_loopback_recognises_ipv4_ipv6_and_localhost() {
+        assert!(host_is_loopback("127.0.0.1"));
+        assert!(host_is_loopback("127.0.0.5"));
+        assert!(host_is_loopback("::1"));
+        assert!(host_is_loopback("localhost"));
+        assert!(host_is_loopback("LocalHost"));
+
+        assert!(!host_is_loopback("0.0.0.0"));
+        assert!(!host_is_loopback("192.168.1.1"));
+        assert!(!host_is_loopback("example.com"));
+    }
 
     #[test]
     fn defaults_to_stdio_global() {

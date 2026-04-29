@@ -57,7 +57,7 @@ Add the following configuration to your agent's MCP servers configuration:
 The MCP server can also expose the [streamable HTTP transport](https://modelcontextprotocol.io/specification/2025-11-25/basic/transports#streamable-http) so that clients on another machine, including Claude Desktop, can reach it without spawning a local binary. The same backend (`VIBE_BACKEND_URL` or the local port file) is used regardless of transport.
 
 <Warning>
-The HTTP transport exposes tools that mutate Vibe Kanban state. Always set `--http-token` (or `VIBE_KANBAN_MCP_HTTP_TOKEN`) when binding to anything other than `127.0.0.1`, or place the server behind a reverse proxy that enforces authentication.
+The HTTP transport exposes tools that mutate Vibe Kanban state. Bearer tokens travel in the request, so any non-loopback deployment **must** terminate TLS in front of the server (a reverse proxy with a valid certificate, an SSH/VPN tunnel, or an authenticated tunnel like Cloudflare Access). Sending bearer credentials over plain `http://` to a remote host leaks the token to anyone on the network path. For loopback-only use (`127.0.0.1`), plain HTTP is fine.
 </Warning>
 
 Start the server in HTTP mode:
@@ -73,7 +73,7 @@ npx vibe-kanban@latest --mcp \
 | Flag | Default | Purpose |
 |------|---------|---------|
 | `--transport` | `stdio` | `stdio` or `http`. |
-| `--http-host` | `127.0.0.1` | Address to bind. Use `0.0.0.0` to accept remote connections. |
+| `--http-host` | `127.0.0.1` | Address to bind. Accepts IPv4, IPv6 (e.g. `::1`), and hostnames such as `localhost`. Use `0.0.0.0` to accept remote connections. |
 | `--http-port` | `4096` | TCP port to bind. |
 | `--http-token` | _unset_ | If set, every request must include `Authorization: Bearer <token>`. |
 | `--http-stateless` | _off_ | Disable per-client sessions (single-shot request/response). |
@@ -81,13 +81,13 @@ npx vibe-kanban@latest --mcp \
 
 Each flag has a matching environment variable: `VIBE_KANBAN_MCP_TRANSPORT`, `VIBE_KANBAN_MCP_HTTP_HOST`, `VIBE_KANBAN_MCP_HTTP_PORT`, `VIBE_KANBAN_MCP_HTTP_TOKEN`.
 
-Point a remote client at `http://<host>:<port>/mcp`. For example, in Claude Desktop:
+Point a remote client at the public TLS-terminated URL of your reverse proxy or tunnel. For example, in Claude Desktop:
 
 ```json
 {
   "mcpServers": {
     "vibe_kanban": {
-      "url": "http://your-host.example.com:4096/mcp",
+      "url": "https://vibe-kanban.your-domain.example/mcp",
       "headers": {
         "Authorization": "Bearer your-shared-secret"
       }
@@ -95,6 +95,8 @@ Point a remote client at `http://<host>:<port>/mcp`. For example, in Claude Desk
   }
 }
 ```
+
+For a quick local-only check on the same machine, you can use `http://127.0.0.1:4096/mcp` without TLS — the bearer token never leaves the loopback interface.
 
 ## Available MCP Tools
 

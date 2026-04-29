@@ -21,16 +21,21 @@ These branches contain commits that are private to this fork:
 - `vk/local-build-gtk-fix` — Build only needed binaries to avoid GTK dependency
 - `vk/fork-mcp-cleanup` — Remove TOOLS enumeration from MCP instructions, add .claude/skills to .gitignore
 
-## Commits to exclude
+## Upstream commits to revert
 
-Never cherry-pick or include these upstream commits — they degrade functionality:
+These upstream commits degrade functionality. They originate on `upstream/main` (not on
+any of our branches), so the only action needed is to revert them on `main` after step 9,
+before step 11's push.
 
 - `97123d5262091deca5e4eba7167164e21329db36` (upstream PR #3387) — degrades functionality
 
-When rebasing any branch in step 7, if one of these commits appears in the branch history,
-drop it (e.g. via `git rebase --onto` or by skipping during interactive rebase). When
-cherry-picking in step 9, never include these SHAs. If `upstream/main` itself contains one
-of these commits, revert it on `main` after step 9 with a clearly-named revert commit.
+For each SHA listed above, if it is reachable from `upstream/main`, run:
+
+```
+git revert --no-edit <sha>
+```
+
+Use a clear commit message (e.g. `revert: upstream <short-sha> (PR #N) — <reason>`).
 
 ## Procedure
 

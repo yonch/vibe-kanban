@@ -247,6 +247,7 @@ export function IssueWorkspacesSectionContainer({
       onWorkspaceClick={handleWorkspaceClick}
       onCreateWorkspace={handleAddWorkspace}
       onUnlinkWorkspace={handleUnlinkWorkspace}
+      onArchiveWorkspace={handleArchiveWorkspace}
       onDeleteWorkspace={handleDeleteWorkspace}
       shouldAnimateCreateButton={shouldAnimateCreateButton}
     />

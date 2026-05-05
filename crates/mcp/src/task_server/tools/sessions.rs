@@ -75,6 +75,10 @@ struct RunCodingAgentInSessionRequest {
     session_id: Uuid,
     #[schemars(description = "Prompt for the coding agent")]
     prompt: String,
+    #[schemars(
+        description = "Optional executor variant/profile name (e.g. 'GEMINI' for CURSOR_AGENT) configured on the Settings page"
+    )]
+    variant: Option<String>,
 }
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
@@ -87,6 +91,10 @@ struct CreateAndRunSessionRequest {
         description = "The coding agent executor to run (e.g. 'CLAUDE_CODE', 'GEMINI', 'CODEX')"
     )]
     executor: String,
+    #[schemars(
+        description = "Optional executor variant/profile name (e.g. 'GEMINI' for CURSOR_AGENT) configured on the Settings page"
+    )]
+    variant: Option<String>,
     #[schemars(description = "Prompt for the coding agent")]
     prompt: String,
     #[schemars(description = "Optional display name for the session")]
@@ -227,6 +235,7 @@ impl McpServer {
         Parameters(CreateAndRunSessionRequest {
             workspace_id,
             executor,
+            variant,
             prompt,
             name,
         }): Parameters<CreateAndRunSessionRequest>,
@@ -281,7 +290,7 @@ impl McpServer {
             prompt: prompt.to_string(),
             executor_config: ExecutorConfigPayload {
                 executor: executor_name,
-                variant: None,
+                variant: Self::sanitize_optional(variant),
                 model_id: None,
                 agent_id: None,
                 reasoning_id: None,
@@ -395,9 +404,11 @@ impl McpServer {
     )]
     async fn run_session_prompt(
         &self,
-        Parameters(RunCodingAgentInSessionRequest { session_id, prompt }): Parameters<
-            RunCodingAgentInSessionRequest,
-        >,
+        Parameters(RunCodingAgentInSessionRequest {
+            session_id,
+            prompt,
+            variant,
+        }): Parameters<RunCodingAgentInSessionRequest>,
     ) -> Result<CallToolResult, ErrorData> {
         let prompt = prompt.trim();
         if prompt.is_empty() {
@@ -422,7 +433,7 @@ impl McpServer {
             );
         }
 
-        let executor_config = match Self::executor_config_payload_for_session(&session) {
+        let executor_config = match Self::executor_config_payload_for_session(&session, variant) {
             Ok(config) => config,
             Err(error_result) => return Ok(Self::tool_error(error_result)),
         };
@@ -509,14 +520,26 @@ impl McpServer {
 impl McpServer {
     fn executor_config_payload_for_session(
         session: &Session,
+        variant: Option<String>,
     ) -> Result<ExecutorConfigPayload, super::ToolError> {
         Ok(ExecutorConfigPayload {
             executor: Self::normalize_executor_name(session.executor.as_deref())?,
-            variant: None,
+            variant: Self::sanitize_optional(variant),
             model_id: None,
             agent_id: None,
             reasoning_id: None,
             permission_policy: None,
+        })
+    }
+
+    fn sanitize_optional(value: Option<String>) -> Option<String> {
+        value.and_then(|v| {
+            let trimmed = v.trim();
+            if trimmed.is_empty() {
+                None
+            } else {
+                Some(trimmed.to_string())
+            }
         })
     }
 

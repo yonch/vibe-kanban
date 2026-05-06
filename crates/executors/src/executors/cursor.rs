@@ -2,10 +2,15 @@ use core::str;
 use std::{collections::HashMap, path::Path, process::Stdio, sync::Arc, time::Duration};
 
 use async_trait::async_trait;
+use command_group::AsyncGroupChild;
 use futures::StreamExt;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::{io::AsyncWriteExt, process::Command};
+use tokio::{
+    io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
+    process::Command,
+};
+use tokio_util::sync::CancellationToken;
 use ts_rs::TS;
 use workspace_utils::{
     command_ext::GroupSpawnNoWindowExt,
@@ -20,8 +25,8 @@ use crate::{
     env::ExecutionEnv,
     executor_discovery::ExecutorDiscoveredOptions,
     executors::{
-        AppendPrompt, AvailabilityInfo, BaseCodingAgent, ExecutorError, SpawnedChild,
-        StandardCodingAgentExecutor,
+        AppendPrompt, AvailabilityInfo, BaseCodingAgent, ExecutorError, ExecutorExitResult,
+        SpawnedChild, StandardCodingAgentExecutor,
     },
     logs::{
         ActionType, FileChange, NormalizedEntry, NormalizedEntryError, NormalizedEntryType,
@@ -33,6 +38,7 @@ use crate::{
     },
     model_selector::{ModelInfo, ModelSelectorConfig, ReasoningOption},
     profile::ExecutorConfig,
+    stdout_dup::create_stdout_pipe_writer,
 };
 
 mod mcp;
@@ -164,6 +170,146 @@ impl CursorAgent {
 
         apply_overrides(builder, &self.cmd)
     }
+
+    async fn spawn_with_command(
+        &self,
+        current_dir: &Path,
+        prompt: &str,
+        env: &ExecutionEnv,
+        command_parts: crate::command::CommandParts,
+    ) -> Result<SpawnedChild, ExecutorError> {
+        let (executable_path, args) = command_parts.into_resolved().await?;
+        let combined_prompt = self.append_prompt.combine_prompt(prompt);
+
+        let mut command = Command::new(executable_path);
+        command
+            .kill_on_drop(true)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .current_dir(current_dir)
+            .env("NPM_CONFIG_LOGLEVEL", "error")
+            .args(&args);
+
+        env.clone()
+            .with_profile(&self.cmd)
+            .apply_to_command(&mut command);
+
+        let mut child = command.group_spawn_no_window()?;
+
+        if let Some(mut stdin) = child.inner().stdin.take() {
+            stdin.write_all(combined_prompt.as_bytes()).await?;
+            stdin.shutdown().await?;
+        }
+
+        let (exit_signal, cancel) = install_result_event_watcher(&mut child)?;
+
+        Ok(SpawnedChild {
+            child,
+            exit_signal: Some(exit_signal),
+            cancel: Some(cancel),
+        })
+    }
+}
+
+/// Watch cursor-agent's stdout for the terminal `{"type":"result"}` event and
+/// signal completion explicitly, instead of relying on the OS-exit watcher.
+///
+/// cursor-agent forks a long-lived `worker-server` subprocess that inherits
+/// the leader's stdout/stderr pipes. After cursor-agent's leader exits, the
+/// worker keeps the pipes open, which makes `tokio::process::Child::try_wait`
+/// race against the SIGCHLD reaper (especially when vibe-kanban runs as PID 1
+/// in a container) — the OS-exit watcher in `spawn_exit_monitor` then returns
+/// an error and the execution gets marked Failed despite a clean run.
+///
+/// We fix this by interposing on stdout: a forwarder task copies cursor-agent's
+/// real stdout into a fresh pipe (which becomes the child's new stdout for
+/// downstream consumers like `track_child_msgs_in_store`), parses each JSON
+/// line, and sends `ExecutorExitResult::Success` on the first `result` event
+/// with `is_error == false` (or `Failure` otherwise). When the forwarder
+/// finishes, the new pipe's write end is dropped so downstream readers see EOF
+/// even if cursor-agent's worker is still holding the original pipe open.
+fn install_result_event_watcher(
+    child: &mut AsyncGroupChild,
+) -> Result<(crate::executors::ExecutorExitSignal, CancellationToken), ExecutorError> {
+    let original_stdout =
+        child.inner().stdout.take().ok_or_else(|| {
+            ExecutorError::Io(std::io::Error::other("cursor-agent missing stdout"))
+        })?;
+    let forwarded_stdout = create_stdout_pipe_writer(child)?;
+
+    let (exit_tx, exit_rx) = tokio::sync::oneshot::channel::<ExecutorExitResult>();
+    let cancel = CancellationToken::new();
+    let cancel_for_task = cancel.clone();
+
+    tokio::spawn(forward_and_watch(
+        original_stdout,
+        forwarded_stdout,
+        exit_tx,
+        cancel_for_task,
+    ));
+
+    Ok((exit_rx, cancel))
+}
+
+/// Copy `stdout` lines into `writer`, signalling on the first
+/// `{"type":"result"}` event we see.
+///
+/// If stdout ends or errors before a result event (e.g. cursor-agent crashed
+/// or hit an auth error and exited before producing JSON output), we send
+/// `Failure` rather than dropping the sender. The container's
+/// `spawn_exit_monitor` maps a closed exit-signal channel to success — if we
+/// silently dropped here we would race that branch against the OS-exit
+/// watcher and could mark a real failure as `Completed`.
+///
+/// Cancellation, on the other hand, only fires from `stop_execution` which
+/// has already written `Killed` to the DB; the monitor's `was_stopped` guard
+/// will skip the update either way, so we drop the sender silently in that
+/// case.
+async fn forward_and_watch<R, W>(
+    stdout: R,
+    writer: W,
+    exit_tx: tokio::sync::oneshot::Sender<ExecutorExitResult>,
+    cancel: CancellationToken,
+) where
+    R: tokio::io::AsyncRead + Unpin,
+    W: tokio::io::AsyncWrite + Unpin,
+{
+    let mut lines = BufReader::new(stdout).lines();
+    let mut writer = writer;
+    let mut exit_tx = Some(exit_tx);
+
+    loop {
+        tokio::select! {
+            _ = cancel.cancelled() => return,
+            next = lines.next_line() => match next {
+                Ok(Some(line)) => {
+                    if writer.write_all(line.as_bytes()).await.is_err()
+                        || writer.write_all(b"\n").await.is_err()
+                    {
+                        break;
+                    }
+                    if exit_tx.is_some()
+                        && let Ok(CursorJson::Result { is_error, .. }) =
+                            serde_json::from_str::<CursorJson>(&line)
+                        && let Some(tx) = exit_tx.take()
+                    {
+                        let result = if is_error.unwrap_or(false) {
+                            ExecutorExitResult::Failure
+                        } else {
+                            ExecutorExitResult::Success
+                        };
+                        let _ = tx.send(result);
+                    }
+                }
+                Ok(None) | Err(_) => break,
+            }
+        }
+    }
+    if let Some(tx) = exit_tx.take() {
+        let _ = tx.send(ExecutorExitResult::Failure);
+    }
+    // Dropping `writer` closes EOF for downstream readers.
 }
 
 #[async_trait]
@@ -192,33 +338,8 @@ impl StandardCodingAgentExecutor for CursorAgent {
         mcp::ensure_mcp_server_trust(self, current_dir).await;
 
         let command_parts = self.build_command_builder()?.build_initial()?;
-
-        let (executable_path, args) = command_parts.into_resolved().await?;
-
-        let combined_prompt = self.append_prompt.combine_prompt(prompt);
-
-        let mut command = Command::new(executable_path);
-        command
-            .kill_on_drop(true)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .current_dir(current_dir)
-            .env("NPM_CONFIG_LOGLEVEL", "error")
-            .args(&args);
-
-        env.clone()
-            .with_profile(&self.cmd)
-            .apply_to_command(&mut command);
-
-        let mut child = command.group_spawn_no_window()?;
-
-        if let Some(mut stdin) = child.inner().stdin.take() {
-            stdin.write_all(combined_prompt.as_bytes()).await?;
-            stdin.shutdown().await?;
-        }
-
-        Ok(child.into())
+        self.spawn_with_command(current_dir, prompt, env, command_parts)
+            .await
     }
 
     async fn spawn_follow_up(
@@ -234,32 +355,8 @@ impl StandardCodingAgentExecutor for CursorAgent {
         let command_parts = self
             .build_command_builder()?
             .build_follow_up(&["--resume".to_string(), session_id.to_string()])?;
-        let (executable_path, args) = command_parts.into_resolved().await?;
-
-        let combined_prompt = self.append_prompt.combine_prompt(prompt);
-
-        let mut command = Command::new(executable_path);
-        command
-            .kill_on_drop(true)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .current_dir(current_dir)
-            .env("NPM_CONFIG_LOGLEVEL", "error")
-            .args(&args);
-
-        env.clone()
-            .with_profile(&self.cmd)
-            .apply_to_command(&mut command);
-
-        let mut child = command.group_spawn_no_window()?;
-
-        if let Some(mut stdin) = child.inner().stdin.take() {
-            stdin.write_all(combined_prompt.as_bytes()).await?;
-            stdin.shutdown().await?;
-        }
-
-        Ok(child.into())
+        self.spawn_with_command(current_dir, prompt, env, command_parts)
+            .await
     }
 
     fn normalize_logs(
@@ -1455,6 +1552,143 @@ mod tests {
         let system_line = r#"{"type":"system","subtype":"init","session_id":"abc-xyz","model":"Claude 4 Sonnet"}"#;
         let parsed: CursorJson = serde_json::from_str(system_line).unwrap();
         assert_eq!(parsed.extract_session_id().as_deref(), None);
+    }
+
+    #[tokio::test]
+    async fn test_forward_and_watch_signals_on_result_event() {
+        // Producer/consumer pair representing cursor-agent's real stdout.
+        let (mut producer, original_stdout) = tokio::io::duplex(4096);
+        // Forwarded pipe — what downstream consumers (track_child_msgs_in_store)
+        // would read.
+        let (forwarded_writer, mut forwarded_reader) = tokio::io::duplex(4096);
+
+        let (exit_tx, exit_rx) = tokio::sync::oneshot::channel();
+        let cancel = CancellationToken::new();
+
+        let watcher = tokio::spawn(forward_and_watch(
+            original_stdout,
+            forwarded_writer,
+            exit_tx,
+            cancel,
+        ));
+
+        // Emit cursor-agent's typical sequence.
+        producer
+            .write_all(b"{\"type\":\"system\",\"subtype\":\"init\",\"session_id\":\"s\"}\n")
+            .await
+            .unwrap();
+        producer
+            .write_all(
+                b"{\"type\":\"assistant\",\"message\":{\"role\":\"assistant\",\"content\":[]}}\n",
+            )
+            .await
+            .unwrap();
+        producer
+            .write_all(b"{\"type\":\"result\",\"subtype\":\"success\",\"is_error\":false}\n")
+            .await
+            .unwrap();
+        drop(producer);
+
+        // Result event should produce Success.
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), exit_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(result, ExecutorExitResult::Success));
+
+        // Watcher exits when the producer closes.
+        watcher.await.unwrap();
+
+        // Downstream reader should see all three forwarded lines.
+        let mut downstream = String::new();
+        tokio::io::AsyncReadExt::read_to_string(&mut forwarded_reader, &mut downstream)
+            .await
+            .unwrap();
+        assert_eq!(downstream.lines().count(), 3);
+        assert!(downstream.contains("\"type\":\"result\""));
+    }
+
+    #[tokio::test]
+    async fn test_forward_and_watch_signals_failure_on_error_result() {
+        let (mut producer, original_stdout) = tokio::io::duplex(4096);
+        let (forwarded_writer, _forwarded_reader) = tokio::io::duplex(4096);
+        let (exit_tx, exit_rx) = tokio::sync::oneshot::channel();
+        let cancel = CancellationToken::new();
+
+        tokio::spawn(forward_and_watch(
+            original_stdout,
+            forwarded_writer,
+            exit_tx,
+            cancel,
+        ));
+
+        producer
+            .write_all(b"{\"type\":\"result\",\"subtype\":\"error\",\"is_error\":true}\n")
+            .await
+            .unwrap();
+        drop(producer);
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), exit_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(result, ExecutorExitResult::Failure));
+    }
+
+    #[tokio::test]
+    async fn test_forward_and_watch_signals_failure_on_eof_without_result() {
+        // If cursor-agent dies before emitting a result event (e.g. auth
+        // error / startup crash), we must signal Failure explicitly. Dropping
+        // the sender would map to success in spawn_exit_monitor and hide the
+        // real failure.
+        let (mut producer, original_stdout) = tokio::io::duplex(4096);
+        let (forwarded_writer, _forwarded_reader) = tokio::io::duplex(4096);
+        let (exit_tx, exit_rx) = tokio::sync::oneshot::channel();
+        let cancel = CancellationToken::new();
+
+        let watcher = tokio::spawn(forward_and_watch(
+            original_stdout,
+            forwarded_writer,
+            exit_tx,
+            cancel,
+        ));
+
+        producer
+            .write_all(b"{\"type\":\"system\",\"subtype\":\"init\"}\n")
+            .await
+            .unwrap();
+        drop(producer);
+        watcher.await.unwrap();
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), exit_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(result, ExecutorExitResult::Failure));
+    }
+
+    #[tokio::test]
+    async fn test_forward_and_watch_drops_sender_on_cancel() {
+        // Cancellation comes from stop_execution which already wrote Killed
+        // to the DB; the monitor's was_stopped guard skips the redundant
+        // status update, so dropping the sender silently here is correct.
+        let (_producer, original_stdout) = tokio::io::duplex(4096);
+        let (forwarded_writer, _forwarded_reader) = tokio::io::duplex(4096);
+        let (exit_tx, exit_rx) = tokio::sync::oneshot::channel();
+        let cancel = CancellationToken::new();
+
+        let watcher = tokio::spawn(forward_and_watch(
+            original_stdout,
+            forwarded_writer,
+            exit_tx,
+            cancel.clone(),
+        ));
+
+        cancel.cancel();
+        watcher.await.unwrap();
+
+        // Sender dropped without sending → receiver gets RecvError.
+        assert!(exit_rx.await.is_err());
     }
 
     #[test]

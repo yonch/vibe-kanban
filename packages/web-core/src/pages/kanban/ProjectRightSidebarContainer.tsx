@@ -156,7 +156,11 @@ function WorkspaceSessionPanel({
   const { projectId, getIssue } = useProjectContext();
   const routeState = useCurrentKanbanRouteState();
   const { workspaces: remoteWorkspaces } = useUserContext();
-  const { activeWorkspaces, archivedWorkspaces } = useWorkspaceContext();
+  const {
+    activeWorkspaces,
+    archivedWorkspaces,
+    selectSession: selectWorkspaceContextSession,
+  } = useWorkspaceContext();
   const conversationListRef = useRef<ConversationListHandle>(null);
   const [isAtBottom, setIsAtBottom] = useState(true);
   const { data: workspace, isLoading: isWorkspaceLoading } = useWorkspaceRecord(
@@ -209,8 +213,16 @@ function WorkspaceSessionPanel({
   }, [projectId, breadcrumbIssueId, appNavigation, onClose]);
 
   const handleOpenWorkspaceView = useCallback(() => {
+    if (selectedSessionId) {
+      selectWorkspaceContextSession(selectedSessionId);
+    }
     appNavigation.goToWorkspace(workspaceId);
-  }, [appNavigation, workspaceId]);
+  }, [
+    appNavigation,
+    workspaceId,
+    selectedSessionId,
+    selectWorkspaceContextSession,
+  ]);
 
   const breadcrumbButtonClass =
     'min-w-0 text-sm text-normal truncate rounded-sm px-1 py-0.5 hover:bg-panel hover:text-high transition-colors';

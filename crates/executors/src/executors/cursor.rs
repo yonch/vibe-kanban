@@ -254,6 +254,18 @@ fn install_result_event_watcher(
 
 /// Copy `stdout` lines into `writer`, signalling on the first
 /// `{"type":"result"}` event we see.
+///
+/// If stdout ends or errors before a result event (e.g. cursor-agent crashed
+/// or hit an auth error and exited before producing JSON output), we send
+/// `Failure` rather than dropping the sender. The container's
+/// `spawn_exit_monitor` maps a closed exit-signal channel to success — if we
+/// silently dropped here we would race that branch against the OS-exit
+/// watcher and could mark a real failure as `Completed`.
+///
+/// Cancellation, on the other hand, only fires from `stop_execution` which
+/// has already written `Killed` to the DB; the monitor's `was_stopped` guard
+/// will skip the update either way, so we drop the sender silently in that
+/// case.
 async fn forward_and_watch<R, W>(
     stdout: R,
     writer: W,
@@ -269,7 +281,7 @@ async fn forward_and_watch<R, W>(
 
     loop {
         tokio::select! {
-            _ = cancel.cancelled() => break,
+            _ = cancel.cancelled() => return,
             next = lines.next_line() => match next {
                 Ok(Some(line)) => {
                     if writer.write_all(line.as_bytes()).await.is_err()
@@ -290,10 +302,12 @@ async fn forward_and_watch<R, W>(
                         let _ = tx.send(result);
                     }
                 }
-                Ok(None) => break,
-                Err(_) => break,
+                Ok(None) | Err(_) => break,
             }
         }
+    }
+    if let Some(tx) = exit_tx.take() {
+        let _ = tx.send(ExecutorExitResult::Failure);
     }
     // Dropping `writer` closes EOF for downstream readers.
 }
@@ -1622,9 +1636,11 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_forward_and_watch_no_signal_without_result_event() {
-        // If cursor-agent dies before emitting a result event (e.g. auth error),
-        // we drop the sender without signalling so the OS-exit path takes over.
+    async fn test_forward_and_watch_signals_failure_on_eof_without_result() {
+        // If cursor-agent dies before emitting a result event (e.g. auth
+        // error / startup crash), we must signal Failure explicitly. Dropping
+        // the sender would map to success in spawn_exit_monitor and hide the
+        // real failure.
         let (mut producer, original_stdout) = tokio::io::duplex(4096);
         let (forwarded_writer, _forwarded_reader) = tokio::io::duplex(4096);
         let (exit_tx, exit_rx) = tokio::sync::oneshot::channel();
@@ -1642,6 +1658,33 @@ mod tests {
             .await
             .unwrap();
         drop(producer);
+        watcher.await.unwrap();
+
+        let result = tokio::time::timeout(std::time::Duration::from_secs(2), exit_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(matches!(result, ExecutorExitResult::Failure));
+    }
+
+    #[tokio::test]
+    async fn test_forward_and_watch_drops_sender_on_cancel() {
+        // Cancellation comes from stop_execution which already wrote Killed
+        // to the DB; the monitor's was_stopped guard skips the redundant
+        // status update, so dropping the sender silently here is correct.
+        let (_producer, original_stdout) = tokio::io::duplex(4096);
+        let (forwarded_writer, _forwarded_reader) = tokio::io::duplex(4096);
+        let (exit_tx, exit_rx) = tokio::sync::oneshot::channel();
+        let cancel = CancellationToken::new();
+
+        let watcher = tokio::spawn(forward_and_watch(
+            original_stdout,
+            forwarded_writer,
+            exit_tx,
+            cancel.clone(),
+        ));
+
+        cancel.cancel();
         watcher.await.unwrap();
 
         // Sender dropped without sending → receiver gets RecvError.

@@ -405,6 +405,7 @@ function WorkspaceSessionPanel({
                   linesRemoved={workspaceSummary?.linesRemoved ?? 0}
                   disableViewCode
                   showOpenWorkspaceButton
+                  onOpenWorkspace={handleOpenWorkspaceView}
                   onScrollToPreviousMessage={handleScrollToPreviousMessage}
                   onScrollToBottom={handleScrollToBottom}
                   onScrollToUserMessage={handleScrollToUserMessage}

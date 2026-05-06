@@ -7,6 +7,12 @@ import type { Session } from 'shared/types';
 
 interface UseWorkspaceSessionsOptions {
   enabled?: boolean;
+  /**
+   * If provided and matches an existing session, this session will be selected
+   * on workspace change (or when the seed itself changes). After a seed has
+   * been consumed, in-page calls to selectSession take over.
+   */
+  seedSessionId?: string;
 }
 
 /** Discriminated union for session selection state */
@@ -27,8 +33,6 @@ interface UseWorkspaceSessionsResult {
   startNewSession: () => void;
 }
 
-const lastSelectedSessionByWorkspace = new Map<string, string>();
-
 /**
  * Hook for managing sessions within a workspace.
  * Fetches all sessions for a workspace and provides session switching capability.
@@ -39,11 +43,15 @@ export function useWorkspaceSessions(
   options: UseWorkspaceSessionsOptions = {}
 ): UseWorkspaceSessionsResult {
   const hostId = useHostId();
-  const { enabled = true } = options;
+  const { enabled = true, seedSessionId } = options;
   const [selection, setSelection] = useState<SessionSelection | undefined>(
     undefined
   );
   const prevWorkspaceIdRef = useRef(workspaceId);
+  const consumedSeedRef = useRef<{
+    workspaceId: string | undefined;
+    sessionId: string | undefined;
+  }>({ workspaceId: undefined, sessionId: undefined });
 
   const { data: sessions = [], isLoading } = useQuery<Session[]>({
     queryKey: workspaceSessionKeys.byWorkspace(workspaceId, hostId),
@@ -58,33 +66,32 @@ export function useWorkspaceSessions(
     const workspaceChanged = prevWorkspaceIdRef.current !== workspaceId;
     prevWorkspaceIdRef.current = workspaceId;
 
-    if (sessions.length > 0) {
-      setSelection((prev) => {
-        if (prev?.mode === 'new' && !workspaceChanged) return prev;
-
-        const previousSession =
-          prev?.mode === 'existing' && !workspaceChanged
-            ? prev.sessionId
-            : undefined;
-        const storedSession = workspaceId
-          ? lastSelectedSessionByWorkspace.get(workspaceId)
-          : undefined;
-        const nextSessionId = [previousSession, storedSession, sessions[0].id]
-          .filter((sessionId): sessionId is string => Boolean(sessionId))
-          .find((sessionId) =>
-            sessions.some((session) => session.id === sessionId)
-          );
-
-        if (workspaceId && nextSessionId) {
-          lastSelectedSessionByWorkspace.set(workspaceId, nextSessionId);
-        }
-
-        return { mode: 'existing', sessionId: nextSessionId ?? sessions[0].id };
-      });
-    } else {
+    if (sessions.length === 0) {
       setSelection(undefined);
+      return;
     }
-  }, [workspaceId, sessions]);
+
+    const seedIsValid =
+      seedSessionId !== undefined &&
+      sessions.some((session) => session.id === seedSessionId);
+    const seedIsFresh =
+      seedIsValid &&
+      (consumedSeedRef.current.workspaceId !== workspaceId ||
+        consumedSeedRef.current.sessionId !== seedSessionId);
+
+    setSelection((prev) => {
+      if (seedIsFresh) {
+        return { mode: 'existing', sessionId: seedSessionId! };
+      }
+      if (prev?.mode === 'new' && !workspaceChanged) return prev;
+      if (prev?.mode === 'existing' && !workspaceChanged) return prev;
+      return { mode: 'existing', sessionId: sessions[0].id };
+    });
+
+    if (seedIsFresh) {
+      consumedSeedRef.current = { workspaceId, sessionId: seedSessionId };
+    }
+  }, [workspaceId, sessions, seedSessionId]);
 
   const isNewSessionMode = selection?.mode === 'new' || sessions.length === 0;
   const selectedSessionId =
@@ -95,25 +102,15 @@ export function useWorkspaceSessions(
     [sessions, selectedSessionId]
   );
 
-  const selectSession = useCallback(
-    (sessionId: string) => {
-      if (workspaceId) {
-        lastSelectedSessionByWorkspace.set(workspaceId, sessionId);
-      }
-      setSelection({ mode: 'existing', sessionId });
-    },
-    [workspaceId]
-  );
+  const selectSession = useCallback((sessionId: string) => {
+    setSelection({ mode: 'existing', sessionId });
+  }, []);
 
   const selectLatestSession = useCallback(() => {
     if (sessions.length > 0) {
-      const sessionId = sessions[0].id;
-      if (workspaceId) {
-        lastSelectedSessionByWorkspace.set(workspaceId, sessionId);
-      }
-      setSelection({ mode: 'existing', sessionId });
+      setSelection({ mode: 'existing', sessionId: sessions[0].id });
     }
-  }, [sessions, workspaceId]);
+  }, [sessions]);
 
   const startNewSession = useCallback(() => {
     setSelection({ mode: 'new' });

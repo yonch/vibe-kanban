@@ -108,8 +108,6 @@ interface SharedProps {
   disableViewCode: boolean;
   /** Replace diff stats with an "Open Workspace" button in header */
   showOpenWorkspaceButton: boolean;
-  /** Override the default open-workspace navigation (e.g. to sync session selection first) */
-  onOpenWorkspace?: () => void;
 }
 
 /** Props for existing session mode */
@@ -155,7 +153,6 @@ export function SessionChatBoxContainer(props: SessionChatBoxContainerProps) {
     getActiveTurnPatchKey,
     disableViewCode = false,
     showOpenWorkspaceButton,
-    onOpenWorkspace,
   } = props;
 
   // Extract mode-specific values
@@ -206,13 +203,9 @@ export function SessionChatBoxContainer(props: SessionChatBoxContainerProps) {
   }, [rightMainPanelMode, setRightMainPanelMode]);
 
   const handleOpenWorkspace = useCallback(() => {
-    if (onOpenWorkspace) {
-      onOpenWorkspace();
-      return;
-    }
     if (!workspaceId) return;
-    appNavigation.goToWorkspace(workspaceId);
-  }, [appNavigation, workspaceId, onOpenWorkspace]);
+    appNavigation.goToWorkspace(workspaceId, { sessionId });
+  }, [appNavigation, workspaceId, sessionId]);
 
   // Get entries early to extract pending approval for scratch key
   const { entries } = useEntries();

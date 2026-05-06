@@ -26,8 +26,9 @@ function parseLocalHostIdFromPathname(pathname: string): string | null {
 }
 
 function resolveLocalDestinationFromPath(path: string): AppDestination | null {
-  const { pathname } = new URL(path, 'http://localhost');
-  const { foundRoute, routeParams } = router.getMatchedRoutes(pathname);
+  const url = new URL(path, 'http://localhost');
+  const { foundRoute, routeParams } = router.getMatchedRoutes(url.pathname);
+  const sessionParam = url.searchParams.get('session') ?? undefined;
 
   if (!foundRoute) {
     return null;
@@ -56,13 +57,15 @@ function resolveLocalDestinationFromPath(path: string): AppDestination | null {
     }
     case '/_app/workspaces_/$workspaceId': {
       const workspaceId = getPathParam(routeParams, 'workspaceId');
-      return workspaceId ? { kind: 'workspace', workspaceId } : null;
+      return workspaceId
+        ? { kind: 'workspace', workspaceId, sessionId: sessionParam }
+        : null;
     }
     case '/_app/hosts/$hostId/workspaces_/$workspaceId': {
       const hostId = getPathParam(routeParams, 'hostId');
       const workspaceId = getPathParam(routeParams, 'workspaceId');
       return hostId && workspaceId
-        ? { kind: 'workspace', hostId, workspaceId }
+        ? { kind: 'workspace', hostId, workspaceId, sessionId: sessionParam }
         : null;
     }
     case '/workspaces/$workspaceId/vscode': {
@@ -203,7 +206,10 @@ function destinationToLocalTarget(
         } as const;
       }
       return { to: '/workspaces/create' } as const;
-    case 'workspace':
+    case 'workspace': {
+      const search = destination.sessionId
+        ? { search: { session: destination.sessionId } }
+        : undefined;
       if (effectiveHostId) {
         return {
           to: '/hosts/$hostId/workspaces/$workspaceId',
@@ -211,12 +217,15 @@ function destinationToLocalTarget(
             hostId: effectiveHostId,
             workspaceId: destination.workspaceId,
           },
+          ...search,
         } as const;
       }
       return {
         to: '/workspaces/$workspaceId',
         params: { workspaceId: destination.workspaceId },
+        ...search,
       } as const;
+    }
     case 'workspace-vscode':
       if (effectiveHostId) {
         return {
@@ -336,8 +345,11 @@ export function createLocalAppNavigation(): AppNavigation {
       navigateTo({ kind: 'workspaces' }, transition),
     goToWorkspacesCreate: (transition) =>
       navigateTo({ kind: 'workspaces-create' }, transition),
-    goToWorkspace: (workspaceId, transition) =>
-      navigateTo({ kind: 'workspace', workspaceId }, transition),
+    goToWorkspace: (workspaceId, options) =>
+      navigateTo(
+        { kind: 'workspace', workspaceId, sessionId: options?.sessionId },
+        options
+      ),
     goToWorkspaceVsCode: (workspaceId, transition) =>
       navigateTo({ kind: 'workspace-vscode', workspaceId }, transition),
     goToExport: (transition) => navigateTo({ kind: 'export' }, transition),

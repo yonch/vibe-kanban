@@ -4,7 +4,12 @@ export type AppDestination =
   | { kind: 'onboarding-sign-in' }
   | { kind: 'workspaces'; hostId?: string }
   | { kind: 'workspaces-create'; hostId?: string }
-  | { kind: 'workspace'; workspaceId: string; hostId?: string }
+  | {
+      kind: 'workspace';
+      workspaceId: string;
+      hostId?: string;
+      sessionId?: string;
+    }
   | { kind: 'workspace-vscode'; workspaceId: string; hostId?: string }
   | { kind: 'export' }
   | { kind: 'project'; projectId: string }
@@ -38,6 +43,11 @@ export type NavigationTransition = {
   replace?: boolean;
 };
 
+export type GoToWorkspaceOptions = NavigationTransition & {
+  /** Pre-select this session in the destination workspace (passed via `?session=` search param) */
+  sessionId?: string;
+};
+
 export interface AppNavigation {
   resolveFromPath(path: string): AppDestination | null;
   goToRoot(transition?: NavigationTransition): void;
@@ -45,7 +55,7 @@ export interface AppNavigation {
   goToOnboardingSignIn(transition?: NavigationTransition): void;
   goToWorkspaces(transition?: NavigationTransition): void;
   goToWorkspacesCreate(transition?: NavigationTransition): void;
-  goToWorkspace(workspaceId: string, transition?: NavigationTransition): void;
+  goToWorkspace(workspaceId: string, options?: GoToWorkspaceOptions): void;
   goToWorkspaceVsCode(
     workspaceId: string,
     transition?: NavigationTransition

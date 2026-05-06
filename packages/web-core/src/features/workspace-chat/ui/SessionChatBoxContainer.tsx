@@ -204,8 +204,8 @@ export function SessionChatBoxContainer(props: SessionChatBoxContainerProps) {
 
   const handleOpenWorkspace = useCallback(() => {
     if (!workspaceId) return;
-    appNavigation.goToWorkspace(workspaceId, { sessionId });
-  }, [appNavigation, workspaceId, sessionId]);
+    appNavigation.goToWorkspace(workspaceId);
+  }, [appNavigation, workspaceId]);
 
   // Get entries early to extract pending approval for scratch key
   const { entries } = useEntries();

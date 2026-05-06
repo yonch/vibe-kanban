@@ -209,10 +209,8 @@ function WorkspaceSessionPanel({
   }, [projectId, breadcrumbIssueId, appNavigation, onClose]);
 
   const handleOpenWorkspaceView = useCallback(() => {
-    appNavigation.goToWorkspace(workspaceId, {
-      sessionId: selectedSessionId,
-    });
-  }, [appNavigation, workspaceId, selectedSessionId]);
+    appNavigation.goToWorkspace(workspaceId);
+  }, [appNavigation, workspaceId]);
 
   const breadcrumbButtonClass =
     'min-w-0 text-sm text-normal truncate rounded-sm px-1 py-0.5 hover:bg-panel hover:text-high transition-colors';

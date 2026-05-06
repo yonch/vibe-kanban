@@ -1,5 +1,5 @@
 import { ReactNode, useMemo, useCallback, useEffect, useRef } from 'react';
-import { useParams, useSearch } from '@tanstack/react-router';
+import { useParams } from '@tanstack/react-router';
 import { useQueryClient } from '@tanstack/react-query';
 import { useWorkspaces } from '@/shared/hooks/useWorkspaces';
 import { workspaceSummaryKeys } from '@/shared/hooks/workspaceSummaryKeys';
@@ -22,8 +22,6 @@ interface WorkspaceProviderProps {
 
 export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
   const { workspaceId } = useParams({ strict: false });
-  const search = useSearch({ strict: false }) as { session?: string };
-  const seedSessionId = search.session;
   const appNavigation = useAppNavigation();
   const currentDestination = useCurrentAppDestination();
   const queryClient = useQueryClient();
@@ -50,10 +48,7 @@ export function WorkspaceProvider({ children }: WorkspaceProviderProps) {
     isLoading: isSessionsLoading,
     isNewSessionMode,
     startNewSession,
-  } = useWorkspaceSessions(workspaceId, {
-    enabled: !isCreateMode,
-    seedSessionId,
-  });
+  } = useWorkspaceSessions(workspaceId, { enabled: !isCreateMode });
 
   const { repos, isLoading: isReposLoading } = useWorkspaceRepo(workspaceId, {
     enabled: !isCreateMode,

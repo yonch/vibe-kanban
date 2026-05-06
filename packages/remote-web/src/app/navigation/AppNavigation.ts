@@ -19,9 +19,8 @@ function getPathParam(
 export function resolveRemoteDestinationFromPath(
   path: string,
 ): AppDestination | null {
-  const url = new URL(path, "http://localhost");
-  const { foundRoute, routeParams } = router.getMatchedRoutes(url.pathname);
-  const sessionParam = url.searchParams.get("session") ?? undefined;
+  const { pathname } = new URL(path, "http://localhost");
+  const { foundRoute, routeParams } = router.getMatchedRoutes(pathname);
 
   if (!foundRoute) {
     return null;
@@ -44,7 +43,7 @@ export function resolveRemoteDestinationFromPath(
       const hostId = getPathParam(routeParams, "hostId");
       const workspaceId = getPathParam(routeParams, "workspaceId");
       return hostId && workspaceId
-        ? { kind: "workspace", hostId, workspaceId, sessionId: sessionParam }
+        ? { kind: "workspace", hostId, workspaceId }
         : null;
     }
     case "/hosts/$hostId/workspaces/$workspaceId/vscode": {
@@ -144,10 +143,7 @@ function destinationToRemoteTarget(
         } as const;
       }
       return { to: "/" } as const;
-    case "workspace": {
-      const search = destination.sessionId
-        ? { search: { session: destination.sessionId } }
-        : undefined;
+    case "workspace":
       if (effectiveHostId) {
         return {
           to: "/hosts/$hostId/workspaces/$workspaceId",
@@ -155,11 +151,9 @@ function destinationToRemoteTarget(
             hostId: effectiveHostId,
             workspaceId: destination.workspaceId,
           },
-          ...search,
         } as const;
       }
       return { to: "/" } as const;
-    }
     case "workspace-vscode":
       if (effectiveHostId) {
         return {
@@ -244,16 +238,8 @@ export function createRemoteHostAppNavigation(hostId: string): AppNavigation {
       navigateTo({ kind: "workspaces", hostId }, transition),
     goToWorkspacesCreate: (transition) =>
       navigateTo({ kind: "workspaces-create", hostId }, transition),
-    goToWorkspace: (workspaceId, options) =>
-      navigateTo(
-        {
-          kind: "workspace",
-          hostId,
-          workspaceId,
-          sessionId: options?.sessionId,
-        },
-        options,
-      ),
+    goToWorkspace: (workspaceId, transition) =>
+      navigateTo({ kind: "workspace", hostId, workspaceId }, transition),
     goToWorkspaceVsCode: (workspaceId, transition) =>
       navigateTo({ kind: "workspace-vscode", hostId, workspaceId }, transition),
     goToExport: (transition) => navigateTo({ kind: "export" }, transition),
@@ -324,11 +310,8 @@ function createRemoteFallbackAppNavigation(): AppNavigation {
       navigateTo({ kind: "workspaces" }, transition),
     goToWorkspacesCreate: (transition) =>
       navigateTo({ kind: "workspaces-create" }, transition),
-    goToWorkspace: (workspaceId, options) =>
-      navigateTo(
-        { kind: "workspace", workspaceId, sessionId: options?.sessionId },
-        options,
-      ),
+    goToWorkspace: (workspaceId, transition) =>
+      navigateTo({ kind: "workspace", workspaceId }, transition),
     goToWorkspaceVsCode: (workspaceId, transition) =>
       navigateTo({ kind: "workspace-vscode", workspaceId }, transition),
     goToExport: (transition) => navigateTo({ kind: "export" }, transition),

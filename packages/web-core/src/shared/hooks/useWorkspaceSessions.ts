@@ -3,16 +3,11 @@ import { useState, useCallback, useEffect, useMemo, useRef } from 'react';
 import { sessionsApi } from '@/shared/lib/api';
 import { useHostId } from '@/shared/providers/HostIdProvider';
 import { workspaceSessionKeys } from '@/shared/hooks/workspaceSessionKeys';
+import { useSelectedSessionStore } from '@/shared/stores/useSelectedSessionStore';
 import type { Session } from 'shared/types';
 
 interface UseWorkspaceSessionsOptions {
   enabled?: boolean;
-  /**
-   * If provided and matches an existing session, this session will be selected
-   * on workspace change (or when the seed itself changes). After a seed has
-   * been consumed, in-page calls to selectSession take over.
-   */
-  seedSessionId?: string;
 }
 
 /** Discriminated union for session selection state */
@@ -43,15 +38,14 @@ export function useWorkspaceSessions(
   options: UseWorkspaceSessionsOptions = {}
 ): UseWorkspaceSessionsResult {
   const hostId = useHostId();
-  const { enabled = true, seedSessionId } = options;
+  const { enabled = true } = options;
   const [selection, setSelection] = useState<SessionSelection | undefined>(
     undefined
   );
   const prevWorkspaceIdRef = useRef(workspaceId);
-  const consumedSeedRef = useRef<{
-    workspaceId: string | undefined;
-    sessionId: string | undefined;
-  }>({ workspaceId: undefined, sessionId: undefined });
+  const setStoredSelection = useSelectedSessionStore(
+    (state) => state.setSelected
+  );
 
   const { data: sessions = [], isLoading } = useQuery<Session[]>({
     queryKey: workspaceSessionKeys.byWorkspace(workspaceId, hostId),
@@ -59,9 +53,10 @@ export function useWorkspaceSessions(
     enabled: enabled && !!workspaceId,
   });
 
-  // Combined effect: handle workspace changes and auto-select sessions
-  // This replaces two separate effects that had a race condition where the reset
-  // effect would fire after auto-select when sessions were cached, undoing the selection.
+  // Auto-select on mount/workspace change. Prefer the store's last-selected
+  // session if it still exists in the fetched list; otherwise fall back to
+  // the most recently used session. The chosen ID is written back to the
+  // store so the workspace remembers what was last viewed.
   useEffect(() => {
     const workspaceChanged = prevWorkspaceIdRef.current !== workspaceId;
     prevWorkspaceIdRef.current = workspaceId;
@@ -71,27 +66,21 @@ export function useWorkspaceSessions(
       return;
     }
 
-    const seedIsValid =
-      seedSessionId !== undefined &&
-      sessions.some((session) => session.id === seedSessionId);
-    const seedIsFresh =
-      seedIsValid &&
-      (consumedSeedRef.current.workspaceId !== workspaceId ||
-        consumedSeedRef.current.sessionId !== seedSessionId);
-
     setSelection((prev) => {
-      if (seedIsFresh) {
-        return { mode: 'existing', sessionId: seedSessionId! };
-      }
-      if (prev?.mode === 'new' && !workspaceChanged) return prev;
-      if (prev?.mode === 'existing' && !workspaceChanged) return prev;
-      return { mode: 'existing', sessionId: sessions[0].id };
-    });
+      if (!workspaceChanged && prev) return prev;
 
-    if (seedIsFresh) {
-      consumedSeedRef.current = { workspaceId, sessionId: seedSessionId };
-    }
-  }, [workspaceId, sessions, seedSessionId]);
+      const stored = workspaceId
+        ? useSelectedSessionStore.getState().byWorkspace[workspaceId]
+        : undefined;
+      const sessionId =
+        stored && sessions.some((s) => s.id === stored)
+          ? stored
+          : sessions[0].id;
+
+      if (workspaceId) setStoredSelection(workspaceId, sessionId);
+      return { mode: 'existing', sessionId };
+    });
+  }, [workspaceId, sessions, setStoredSelection]);
 
   const isNewSessionMode = selection?.mode === 'new' || sessions.length === 0;
   const selectedSessionId =
@@ -102,15 +91,21 @@ export function useWorkspaceSessions(
     [sessions, selectedSessionId]
   );
 
-  const selectSession = useCallback((sessionId: string) => {
-    setSelection({ mode: 'existing', sessionId });
-  }, []);
+  const selectSession = useCallback(
+    (sessionId: string) => {
+      if (workspaceId) setStoredSelection(workspaceId, sessionId);
+      setSelection({ mode: 'existing', sessionId });
+    },
+    [workspaceId, setStoredSelection]
+  );
 
   const selectLatestSession = useCallback(() => {
     if (sessions.length > 0) {
-      setSelection({ mode: 'existing', sessionId: sessions[0].id });
+      const sessionId = sessions[0].id;
+      if (workspaceId) setStoredSelection(workspaceId, sessionId);
+      setSelection({ mode: 'existing', sessionId });
     }
-  }, [sessions]);
+  }, [sessions, workspaceId, setStoredSelection]);
 
   const startNewSession = useCallback(() => {
     setSelection({ mode: 'new' });

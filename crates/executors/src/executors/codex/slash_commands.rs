@@ -166,6 +166,12 @@ impl Codex {
                             .await?;
                         let thread_id = fork_response.thread.id;
                         tracing::debug!("forked thread for compact, new thread_id={thread_id}");
+                        // Register the compact thread so its `turn/completed`
+                        // notification terminates the executor. Without this,
+                        // the new primary-thread filter would treat compaction
+                        // completion as a subagent event and leave the process
+                        // running indefinitely.
+                        client.register_session(&thread_id).await?;
                         client.thread_compact_start(thread_id).await?;
                     }
                     CodexSlashCommand::Status => {

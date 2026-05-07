@@ -654,6 +654,14 @@ impl AppServerClient {
         Ok(())
     }
 
+    async fn is_primary_thread(&self, thread_id: &str) -> bool {
+        self.thread_id
+            .lock()
+            .await
+            .as_deref()
+            .is_some_and(|registered| registered == thread_id)
+    }
+
     async fn send_message<M>(&self, message: &M) -> Result<(), ExecutorError>
     where
         M: Serialize + Sync,
@@ -859,25 +867,42 @@ impl JsonRpcCallbacks for AppServerClient {
 
         let method = notification.method.as_str();
 
-        // Detect completed plan items in the notification stream
+        // Detect completed plan items in the notification stream.
+        // Only track plans on the registered (parent) thread — `spawn_agent`
+        // forks emit their own item/completed events that must not influence
+        // parent-thread plan-mode behavior.
         if self.plan_mode
             && method == "item/completed"
             && let Some(ref params) = notification.params
             && let Ok(completed) =
                 serde_json::from_value::<ItemCompletedNotification>(params.clone())
+            && self.is_primary_thread(&completed.thread_id).await
             && let ThreadItem::Plan { id, .. } = completed.item
         {
             *self.pending_plan.lock().await = Some(PendingPlan { item_id: id });
         }
 
-        // V2 turn completion detection
+        // V2 turn completion detection.
+        //
+        // Codex emits `turn/completed` per thread. With `spawn_agent` (full-history
+        // forks), each subagent runs in its own thread and signals turn/completed
+        // when it finishes — but the parent thread is still active, waiting to
+        // consume the spawn result. Only the registered (parent) thread's
+        // completion should terminate this executor.
         if method == "turn/completed" {
-            let mut keep_alive = false;
+            let Some(completed) = notification
+                .params
+                .and_then(|p| serde_json::from_value::<TurnCompletedNotification>(p).ok())
+            else {
+                return Ok(false);
+            };
 
-            if let Some(params) = notification.params
-                && let Ok(completed) = serde_json::from_value::<TurnCompletedNotification>(params)
-                && completed.turn.status == TurnStatus::Interrupted
-            {
+            if !self.is_primary_thread(&completed.thread_id).await {
+                return Ok(false);
+            }
+
+            let mut keep_alive = false;
+            if completed.turn.status == TurnStatus::Interrupted {
                 tracing::debug!("codex turn interrupted; flushing feedback queue");
                 if self.flush_pending_feedback().await {
                     keep_alive = true;
@@ -1000,5 +1025,48 @@ impl LogWriter {
         guard.write_all(b"\n").await.map_err(ExecutorError::Io)?;
         guard.flush().await.map_err(ExecutorError::Io)?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use tokio::io::sink;
+    use tokio_util::sync::CancellationToken;
+
+    use super::*;
+
+    fn make_client() -> Arc<AppServerClient> {
+        AppServerClient::new(
+            LogWriter::new(sink()),
+            None,
+            false,
+            false,
+            RepoContext::default(),
+            false,
+            String::new(),
+            CancellationToken::new(),
+        )
+    }
+
+    #[tokio::test]
+    async fn primary_thread_matches_registered_id_only() {
+        let client = make_client();
+
+        // Before registration, no thread is primary.
+        assert!(!client.is_primary_thread("any-thread").await);
+
+        client
+            .register_session("parent-thread")
+            .await
+            .expect("register_session should succeed");
+
+        // The registered (parent) thread is primary.
+        assert!(client.is_primary_thread("parent-thread").await);
+
+        // Subagent threads spawned via codex `spawn_agent` use distinct
+        // thread ids and must not be treated as the primary thread —
+        // otherwise their `turn/completed` would terminate the parent
+        // session prematurely.
+        assert!(!client.is_primary_thread("subagent-thread").await);
     }
 }

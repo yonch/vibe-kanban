@@ -823,7 +823,6 @@ export function SessionChatBox<TExecutor extends string = string>({
             className="min-w-0 max-w-[120px]"
             onOpenChange={onDropdownOpenChange}
             side="top"
-            align="end"
           >
             {sessions.length > 0 ? (
               <>

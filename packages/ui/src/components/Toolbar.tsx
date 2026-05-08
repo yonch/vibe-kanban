@@ -64,7 +64,6 @@ interface ToolbarDropdownProps {
   disabled?: boolean;
   onOpenChange?: (open: boolean) => void;
   side?: 'top' | 'right' | 'bottom' | 'left';
-  align?: 'start' | 'center' | 'end';
 }
 
 function ToolbarDropdown({
@@ -75,7 +74,6 @@ function ToolbarDropdown({
   disabled,
   onOpenChange,
   side,
-  align,
 }: ToolbarDropdownProps) {
   const { t } = useTranslation('common');
 
@@ -87,7 +85,7 @@ function ToolbarDropdown({
         className={className}
         disabled={disabled}
       />
-      <DropdownMenuContent side={side} align={align}>
+      <DropdownMenuContent side={side}>
         {children ?? (
           <>
             <DropdownMenuLabel>{t('toolbar.sortBy')}</DropdownMenuLabel>

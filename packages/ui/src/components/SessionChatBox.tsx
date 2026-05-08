@@ -71,6 +71,9 @@ interface SessionProps<TExecutor extends string = string> {
   isNewSessionMode?: boolean;
   onNewSession?: () => void;
   onRenameSession?: (sessionId: string, currentName: string) => void;
+  /** Fires when the session dropdown opens or closes. Used to refetch the
+   * session list so MCP-created sessions show up without a manual reload. */
+  onDropdownOpenChange?: (open: boolean) => void;
 }
 
 export interface SessionToolbarActionItem {
@@ -359,6 +362,7 @@ export function SessionChatBox<TExecutor extends string = string>({
     isNewSessionMode,
     onNewSession,
     onRenameSession,
+    onDropdownOpenChange,
   } = session;
   const isLatestSelected =
     sessions.length > 0 && selectedSessionId === sessions[0].id;
@@ -817,15 +821,10 @@ export function SessionChatBox<TExecutor extends string = string>({
             label={sessionLabel}
             disabled={isInFeedbackMode || isInEditMode || isInApprovalMode}
             className="min-w-0 max-w-[120px]"
+            onOpenChange={onDropdownOpenChange}
+            side="top"
+            align="end"
           >
-            {/* New Session option */}
-            <DropdownMenuItem
-              icon={isNewSessionMode ? CheckIcon : PlusIcon}
-              onClick={() => onNewSession?.()}
-            >
-              {t('conversation.sessions.newSession')}
-            </DropdownMenuItem>
-            {sessions.length > 0 && <DropdownMenuSeparator />}
             {sessions.length > 0 ? (
               <>
                 <DropdownMenuLabel>
@@ -863,21 +862,26 @@ export function SessionChatBox<TExecutor extends string = string>({
               </DropdownMenuItem>
             )}
             {onRenameSession && selectedSessionId && !isNewSessionMode && (
-              <>
-                <DropdownMenuSeparator />
-                <DropdownMenuItem
-                  icon={PencilSimpleIcon}
-                  onClick={() =>
-                    onRenameSession(
-                      selectedSessionId,
-                      selectedSessionObj?.name ?? ''
-                    )
-                  }
-                >
-                  {t('conversation.sessions.rename')}
-                </DropdownMenuItem>
-              </>
+              <DropdownMenuItem
+                icon={PencilSimpleIcon}
+                onClick={() =>
+                  onRenameSession(
+                    selectedSessionId,
+                    selectedSessionObj?.name ?? ''
+                  )
+                }
+              >
+                {t('conversation.sessions.rename')}
+              </DropdownMenuItem>
             )}
+            <DropdownMenuSeparator />
+            {/* New Session pinned to bottom (closest to trigger when menu opens upward) */}
+            <DropdownMenuItem
+              icon={isNewSessionMode ? CheckIcon : PlusIcon}
+              onClick={() => onNewSession?.()}
+            >
+              {t('conversation.sessions.newSession')}
+            </DropdownMenuItem>
           </ToolbarDropdown>
         </>
       }

@@ -187,6 +187,18 @@ export function SessionChatBoxContainer(props: SessionChatBoxContainerProps) {
     },
     [queryClient, hostId, workspaceId]
   );
+
+  // Refetch the session list whenever the user opens the session dropdown so
+  // sessions created via the MCP server show up without a manual reload.
+  const handleSessionDropdownOpenChange = useCallback(
+    (open: boolean) => {
+      if (!open || !workspaceId) return;
+      void queryClient.invalidateQueries({
+        queryKey: workspaceSessionKeys.byWorkspace(workspaceId, hostId),
+      });
+    },
+    [queryClient, hostId, workspaceId]
+  );
   const appNavigation = useAppNavigation();
 
   const { executeAction } = useActions();
@@ -1043,6 +1055,7 @@ export function SessionChatBoxContainer(props: SessionChatBoxContainerProps) {
         isNewSessionMode: needsExecutorSelection,
         onNewSession: onStartNewSession,
         onRenameSession: handleRenameSession,
+        onDropdownOpenChange: handleSessionDropdownOpenChange,
       }}
       toolbarActions={{
         items: toolbarActionItems,

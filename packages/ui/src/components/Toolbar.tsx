@@ -62,6 +62,8 @@ interface ToolbarDropdownProps {
   children?: ReactNode;
   className?: string;
   disabled?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  side?: 'top' | 'right' | 'bottom' | 'left';
 }
 
 function ToolbarDropdown({
@@ -70,18 +72,20 @@ function ToolbarDropdown({
   children,
   className,
   disabled,
+  onOpenChange,
+  side,
 }: ToolbarDropdownProps) {
   const { t } = useTranslation('common');
 
   return (
-    <DropdownMenu>
+    <DropdownMenu onOpenChange={onOpenChange}>
       <DropdownMenuTriggerButton
         icon={icon}
         label={label}
         className={className}
         disabled={disabled}
       />
-      <DropdownMenuContent>
+      <DropdownMenuContent side={side}>
         {children ?? (
           <>
             <DropdownMenuLabel>{t('toolbar.sortBy')}</DropdownMenuLabel>

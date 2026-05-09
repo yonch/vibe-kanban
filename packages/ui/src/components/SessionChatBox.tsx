@@ -860,6 +860,10 @@ export function SessionChatBox<TExecutor extends string = string>({
                 {t('conversation.sessions.noPreviousSessions')}
               </DropdownMenuItem>
             )}
+            <DropdownMenuSeparator />
+            {/* Rename + New Session pinned below the separator (closest to
+             * trigger when menu opens upward), so newly-arrived MRU rows
+             * extend the menu upward without shifting these under the cursor. */}
             {onRenameSession && selectedSessionId && !isNewSessionMode && (
               <DropdownMenuItem
                 icon={PencilSimpleIcon}
@@ -873,8 +877,6 @@ export function SessionChatBox<TExecutor extends string = string>({
                 {t('conversation.sessions.rename')}
               </DropdownMenuItem>
             )}
-            <DropdownMenuSeparator />
-            {/* New Session pinned to bottom (closest to trigger when menu opens upward) */}
             <DropdownMenuItem
               icon={isNewSessionMode ? CheckIcon : PlusIcon}
               onClick={() => onNewSession?.()}

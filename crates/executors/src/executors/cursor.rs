@@ -202,6 +202,11 @@ fn cursor_reasoning_options(base_model: &str) -> Vec<ReasoningOption> {
         "gpt-5.2" | "gpt-5.1-codex-max" | "gpt-5.1" => {
             ReasoningOption::from_names(["medium", "high"].map(String::from))
         }
+        // Cursor's "thinking" toggle and reasoning effort are orthogonal:
+        // non-thinking variants still expose the full low/medium/high/xhigh/max
+        // matrix (effort = hidden reasoning tokens spent before answering;
+        // thinking = whether a separate chain-of-thought block streams).
+        // Same applies to the 4.6 family below — do not consolidate.
         "opus-4.7" | "opus-4.7-fast" | "opus-4.7-thinking" | "opus-4.7-thinking-fast" => {
             ReasoningOption::from_names(["low", "medium", "high", "xhigh", "max"].map(String::from))
         }

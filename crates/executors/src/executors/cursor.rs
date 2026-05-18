@@ -73,17 +73,20 @@ pub struct CursorAgent {
 // get the model full name
 fn resolve_cursor_model_name<'a>(base_model: &'a str, reasoning: Option<&'a str>) -> &'a str {
     match (base_model, reasoning) {
+        // gpt-5.5 is the one family where cursor's effort suffix differs from
+        // our vk-wide convention (`extra-high` vs `xhigh`). Translate here so
+        // the option ID stays `xhigh` everywhere in vk.
         ("gpt-5.5", Some("none")) => "gpt-5.5-none",
         ("gpt-5.5", Some("low")) => "gpt-5.5-low",
         ("gpt-5.5", Some("medium")) => "gpt-5.5-medium",
         ("gpt-5.5", Some("high") | None) => "gpt-5.5-high",
-        ("gpt-5.5", Some("extra-high")) => "gpt-5.5-extra-high",
+        ("gpt-5.5", Some("xhigh")) => "gpt-5.5-extra-high",
 
         ("gpt-5.5-fast", Some("none")) => "gpt-5.5-none-fast",
         ("gpt-5.5-fast", Some("low")) => "gpt-5.5-low-fast",
         ("gpt-5.5-fast", Some("medium")) => "gpt-5.5-medium-fast",
         ("gpt-5.5-fast", Some("high") | None) => "gpt-5.5-high-fast",
-        ("gpt-5.5-fast", Some("extra-high")) => "gpt-5.5-extra-high-fast",
+        ("gpt-5.5-fast", Some("xhigh")) => "gpt-5.5-extra-high-fast",
 
         ("gpt-5.4", Some("medium")) => "gpt-5.4-medium",
         ("gpt-5.4", Some("high") | None) => "gpt-5.4-high",
@@ -182,7 +185,7 @@ fn resolve_cursor_model_name<'a>(base_model: &'a str, reasoning: Option<&'a str>
 fn cursor_reasoning_options(base_model: &str) -> Vec<ReasoningOption> {
     match base_model {
         "gpt-5.5" | "gpt-5.5-fast" => ReasoningOption::from_names(
-            ["none", "low", "medium", "high", "extra-high"].map(String::from),
+            ["none", "low", "medium", "high", "xhigh"].map(String::from),
         ),
         "gpt-5.4" | "gpt-5.4-fast" => {
             ReasoningOption::from_names(["medium", "high", "xhigh"].map(String::from))

@@ -61,7 +61,7 @@ pub struct CursorAgent {
     pub force: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(
-        description = "auto, opus-4.7, opus-4.7-fast, opus-4.7-thinking, opus-4.7-thinking-fast, opus-4.6, opus-4.6-1m, opus-4.6-1m-thinking, opus-4.6-1m-thinking-fast, sonnet-4.6, gpt-5.5, gpt-5.5-fast, gpt-5.4, gpt-5.4-fast, gpt-5.4-mini, gpt-5.4-nano, gpt-5.3-codex, gpt-5.3-codex-fast, gpt-5.3-codex-spark-preview, gpt-5.2, gpt-5.2-codex, gpt-5.2-codex-fast, gpt-5.1, gpt-5.1-codex-max, gpt-5.1-codex-mini, grok, grok-4.3, kimi-k2.5, gemini-3.1-pro, gemini-3-pro, gemini-3-flash, opus-4.5, sonnet-4.5, composer-1.5, composer-1, composer-2, composer-2-fast, composer-2.5, composer-2.5-fast"
+        description = "auto, opus-4.7, opus-4.7-fast, opus-4.7-thinking, opus-4.7-thinking-fast, opus-4.6, sonnet-4.6, gpt-5.5, gpt-5.5-fast, gpt-5.4, gpt-5.4-fast, gpt-5.4-mini, gpt-5.4-nano, gpt-5.3-codex, gpt-5.3-codex-fast, gpt-5.3-codex-spark-preview, gpt-5.2, gpt-5.2-codex, gpt-5.2-codex-fast, gpt-5.1, gpt-5.1-codex-max, gpt-5.1-codex-mini, grok, grok-4.3, kimi-k2.5, gemini-3.1-pro, gemini-3-pro, gemini-3-flash, opus-4.5, sonnet-4.5, composer-1.5, composer-1, composer-2, composer-2-fast, composer-2.5, composer-2.5-fast"
     )]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -161,15 +161,18 @@ fn resolve_cursor_model_name<'a>(base_model: &'a str, reasoning: Option<&'a str>
         ("opus-4.7-thinking-fast", Some("xhigh")) => "claude-opus-4-7-thinking-xhigh-fast",
         ("opus-4.7-thinking-fast", Some("max")) => "claude-opus-4-7-thinking-max-fast",
 
-        ("opus-4.6", Some("standard")) => "opus-4.6",
-        ("opus-4.6", Some("thinking") | None) => "opus-4.6-thinking",
-
-        ("opus-4.6-1m", Some("high") | None) => "claude-4.6-opus-high",
-        ("opus-4.6-1m", Some("max")) => "claude-4.6-opus-max",
-        ("opus-4.6-1m-thinking", Some("high") | None) => "claude-4.6-opus-high-thinking",
-        ("opus-4.6-1m-thinking", Some("max")) => "claude-4.6-opus-max-thinking",
-        ("opus-4.6-1m-thinking-fast", Some("high") | None) => "claude-4.6-opus-high-thinking-fast",
-        ("opus-4.6-1m-thinking-fast", Some("max")) => "claude-4.6-opus-max-thinking-fast",
+        // Cursor's canonical IDs are inconsistent across Claude versions:
+        // 4.7 is `claude-opus-4-7-<effort>[-thinking][-fast]`, but 4.6 is
+        // `claude-4.6-opus-<effort>[-thinking][-fast]`. Match upstream verbatim.
+        // Old `opus-4.6`/`opus-4.6-thinking` aliases were retired from
+        // `cursor-agent --list-models`; the 4.6 family is now the single
+        // `claude-4.6-opus-*` matrix below (no separate 1M base).
+        ("opus-4.6", Some("high") | None) => "claude-4.6-opus-high",
+        ("opus-4.6", Some("max")) => "claude-4.6-opus-max",
+        ("opus-4.6", Some("high-thinking")) => "claude-4.6-opus-high-thinking",
+        ("opus-4.6", Some("max-thinking")) => "claude-4.6-opus-max-thinking",
+        ("opus-4.6", Some("high-thinking-fast")) => "claude-4.6-opus-high-thinking-fast",
+        ("opus-4.6", Some("max-thinking-fast")) => "claude-4.6-opus-max-thinking-fast",
 
         ("sonnet-4.6", Some("standard")) => "sonnet-4.6",
         ("sonnet-4.6", Some("thinking") | None) => "sonnet-4.6-thinking",
@@ -202,10 +205,18 @@ fn cursor_reasoning_options(base_model: &str) -> Vec<ReasoningOption> {
         "opus-4.7" | "opus-4.7-fast" | "opus-4.7-thinking" | "opus-4.7-thinking-fast" => {
             ReasoningOption::from_names(["low", "medium", "high", "xhigh", "max"].map(String::from))
         }
-        "opus-4.6-1m" | "opus-4.6-1m-thinking" | "opus-4.6-1m-thinking-fast" => {
-            ReasoningOption::from_names(["high", "max"].map(String::from))
-        }
-        "opus-4.6" | "sonnet-4.6" | "opus-4.5" | "sonnet-4.5" => vec![
+        "opus-4.6" => ReasoningOption::from_names(
+            [
+                "high",
+                "max",
+                "high-thinking",
+                "max-thinking",
+                "high-thinking-fast",
+                "max-thinking-fast",
+            ]
+            .map(String::from),
+        ),
+        "sonnet-4.6" | "opus-4.5" | "sonnet-4.5" => vec![
             ReasoningOption {
                 id: "standard".to_string(),
                 label: "Standard".to_string(),
@@ -850,12 +861,6 @@ impl StandardCodingAgentExecutor for CursorAgent {
             ("opus-4.7-thinking", "Claude 4.7 Opus Thinking"),
             ("opus-4.7-thinking-fast", "Claude 4.7 Opus Thinking Fast"),
             ("opus-4.6", "Claude 4.6 Opus"),
-            ("opus-4.6-1m", "Claude 4.6 Opus 1M"),
-            ("opus-4.6-1m-thinking", "Claude 4.6 Opus 1M Thinking"),
-            (
-                "opus-4.6-1m-thinking-fast",
-                "Claude 4.6 Opus 1M Thinking Fast",
-            ),
             ("sonnet-4.6", "Claude 4.6 Sonnet"),
             ("gpt-5.3-codex", "GPT-5.3 Codex"),
             ("gpt-5.3-codex-fast", "GPT-5.3 Codex Fast"),

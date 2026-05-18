@@ -44,6 +44,14 @@ use crate::{
 mod mcp;
 const CURSOR_AUTH_REQUIRED_MSG: &str = "Authentication required. Please run 'cursor-agent login' first, or set CURSOR_API_KEY environment variable.";
 
+/// Stderr lines we drop from the surfaced UI because they are emitted as part
+/// of cursor-agent's normal shutdown path after we send SIGINT (see
+/// `install_result_event_watcher` for why we kill on the `result` event).
+/// Without this filter every successful run lights up the UI with a red
+/// "Aborting operation..." entry even though the auto-commit hook ran.
+const SUPPRESSED_STDERR_PATTERNS: &[&str] =
+    &["Aborting operation...", "Aborting current operation..."];
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, TS, JsonSchema)]
 pub struct CursorAgent {
     #[serde(default)]
@@ -386,6 +394,15 @@ impl StandardCodingAgentExecutor for CursorAgent {
                 }))
                 .time_gap(Duration::from_secs(2))
                 .index_provider(entry_index_provider_stderr.clone())
+                .transform_lines(Box::new(|lines: &mut Vec<String>| {
+                    lines.retain(|line| {
+                        let stripped = strip_ansi_escapes::strip_str(line);
+                        let trimmed = stripped.trim();
+                        !SUPPRESSED_STDERR_PATTERNS
+                            .iter()
+                            .any(|pattern| trimmed.contains(pattern))
+                    });
+                }))
                 .build();
 
             while let Some(Ok(chunk)) = stderr.next().await {
@@ -1689,6 +1706,54 @@ mod tests {
 
         // Sender dropped without sending → receiver gets RecvError.
         assert!(exit_rx.await.is_err());
+    }
+
+    #[tokio::test]
+    async fn test_cursor_stderr_suppresses_shutdown_messages() {
+        // After install_result_event_watcher signals exit, vibe-kanban
+        // sends SIGINT to cursor-agent which prints "Aborting operation..."
+        // to stderr as part of its handler. We must not surface that as a
+        // red error message in the UI.
+        let executor = CursorAgent {
+            append_prompt: AppendPrompt::default(),
+            force: None,
+            model: None,
+            reasoning: None,
+            cmd: Default::default(),
+        };
+        let msg_store = Arc::new(MsgStore::new());
+        let current_dir = std::path::PathBuf::from("/tmp/test-worktree");
+
+        msg_store.push(workspace_utils::log_msg::LogMsg::Stderr(
+            "Aborting operation...\n".to_string(),
+        ));
+        msg_store.push(workspace_utils::log_msg::LogMsg::Stderr(
+            "Aborting current operation...\n".to_string(),
+        ));
+        msg_store.push_finished();
+
+        executor.normalize_logs(msg_store.clone(), &current_dir);
+        tokio::time::sleep(tokio::time::Duration::from_millis(150)).await;
+
+        let entries: Vec<NormalizedEntry> = msg_store
+            .get_history()
+            .into_iter()
+            .filter_map(|m| match m {
+                workspace_utils::log_msg::LogMsg::JsonPatch(p) => {
+                    crate::logs::utils::patch::extract_normalized_entry_from_patch(&p)
+                        .map(|(_, e)| e)
+                }
+                _ => None,
+            })
+            .collect();
+
+        assert!(
+            !entries
+                .iter()
+                .any(|e| e.content.contains("Aborting operation")
+                    || e.content.contains("Aborting current operation")),
+            "Suppressed shutdown messages leaked into normalized entries: {entries:?}"
+        );
     }
 
     #[test]

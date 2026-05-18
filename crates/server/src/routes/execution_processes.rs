@@ -344,29 +344,29 @@ async fn wait_for_executions(
 
     loop {
         for id in &request.execution_ids {
-            if let Some(ep) = ExecutionProcess::find_by_id(pool, *id).await? {
-                if ep.status != ExecutionProcessStatus::Running {
-                    let status = match ep.status {
-                        ExecutionProcessStatus::Completed => "completed",
-                        ExecutionProcessStatus::Failed => "failed",
-                        ExecutionProcessStatus::Killed => "killed",
-                        ExecutionProcessStatus::Running => unreachable!(),
-                    };
+            if let Some(ep) = ExecutionProcess::find_by_id(pool, *id).await?
+                && ep.status != ExecutionProcessStatus::Running
+            {
+                let status = match ep.status {
+                    ExecutionProcessStatus::Completed => "completed",
+                    ExecutionProcessStatus::Failed => "failed",
+                    ExecutionProcessStatus::Killed => "killed",
+                    ExecutionProcessStatus::Running => unreachable!(),
+                };
 
-                    let output = CodingAgentTurn::find_by_execution_process_id(pool, ep.id)
-                        .await?
-                        .and_then(|turn| turn.summary);
+                let output = CodingAgentTurn::find_by_execution_process_id(pool, ep.id)
+                    .await?
+                    .and_then(|turn| turn.summary);
 
-                    return Ok(ResponseJson(ApiResponse::success(
-                        WaitForExecutionsResponse {
-                            completed_execution_id: ep.id,
-                            session_id: ep.session_id,
-                            status: status.to_string(),
-                            completed_at: ep.completed_at,
-                            output,
-                        },
-                    )));
-                }
+                return Ok(ResponseJson(ApiResponse::success(
+                    WaitForExecutionsResponse {
+                        completed_execution_id: ep.id,
+                        session_id: ep.session_id,
+                        status: status.to_string(),
+                        completed_at: ep.completed_at,
+                        output,
+                    },
+                )));
             }
         }
 

@@ -4,7 +4,7 @@ use std::{
 };
 
 use api_types::{PullRequestStatus, UpdatePullRequestApiRequest, UpsertPullRequestRequest};
-use chrono::{DateTime, Utc};
+use chrono::{NaiveDateTime, Utc};
 use db::{
     DBService,
     models::{
@@ -63,7 +63,11 @@ pub struct PrMonitorService<C: ContainerService> {
     /// Tracks when we last ran PR discovery so we only poll workspaces
     /// that have been updated since then, avoiding unnecessary GitHub API calls
     /// that could exhaust rate limits for users with many active workspaces.
-    last_discovery_at: Mutex<Option<DateTime<Utc>>>,
+    ///
+    /// Stored as `NaiveDateTime` (UTC clock value, no offset) so the SQL
+    /// comparison against `workspaces.updated_at` lines up textually — see
+    /// `Merge::get_active_workspace_repos`.
+    last_discovery_at: Mutex<Option<NaiveDateTime>>,
 }
 
 impl<C: ContainerService + Send + Sync + 'static> PrMonitorService<C> {
@@ -154,7 +158,7 @@ impl<C: ContainerService + Send + Sync + 'static> PrMonitorService<C> {
         // a workspace updated between the query and this timestamp would be missed
         // by both the current and future discovery cycles. Capturing early may
         // re-query some workspaces, but that is safe since discovery is idempotent.
-        let discovery_started_at = Utc::now();
+        let discovery_started_at = Utc::now().naive_utc();
         let candidates = Merge::get_active_workspace_repos(&self.db.pool, updated_since).await?;
 
         if candidates.is_empty() {

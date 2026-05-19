@@ -1271,7 +1271,15 @@ impl ClaudeLogProcessor {
                     }
                     Some("status") => {
                         if let Some(status) = status {
-                            patches.push(add_system_message(status.clone(), entry_index_provider));
+                            // "requesting" is emitted by the Claude CLI before every
+                            // LLM request as a transient progress indicator. Persisting
+                            // it produces one info-message between every internal turn
+                            // (and clutters historical conversations). Other status
+                            // values are kept so we don't drop anything informative.
+                            if status != "requesting" {
+                                patches
+                                    .push(add_system_message(status.clone(), entry_index_provider));
+                            }
                         }
                     }
                     Some("compact_boundary") => {}
@@ -2804,6 +2812,30 @@ mod tests {
             entries[0].content,
             "System initialized with model: claude-sonnet-4-20250514"
         );
+    }
+
+    #[test]
+    fn test_status_requesting_is_filtered() {
+        // "requesting" is a transient progress indicator emitted before every
+        // LLM request; we don't want it cluttering the conversation history.
+        let json = r#"{"type":"system","subtype":"status","status":"requesting"}"#;
+        let parsed: ClaudeJson = serde_json::from_str(json).unwrap();
+        let entries = normalize(&parsed, "");
+        assert_eq!(entries.len(), 0);
+    }
+
+    #[test]
+    fn test_status_non_requesting_is_kept() {
+        // Other status values are kept so we don't lose informative events.
+        let json = r#"{"type":"system","subtype":"status","status":"waiting for permission"}"#;
+        let parsed: ClaudeJson = serde_json::from_str(json).unwrap();
+        let entries = normalize(&parsed, "");
+        assert_eq!(entries.len(), 1);
+        assert!(matches!(
+            entries[0].entry_type,
+            NormalizedEntryType::SystemMessage
+        ));
+        assert_eq!(entries[0].content, "waiting for permission");
     }
 
     #[test]

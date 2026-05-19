@@ -61,7 +61,7 @@ pub struct CursorAgent {
     pub force: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(
-        description = "auto, opus-4.6, sonnet-4.6, gpt-5.4, gpt-5.4-fast, gpt-5.3-codex, gpt-5.3-codex-fast, gpt-5.3-codex-spark-preview, gpt-5.2, gpt-5.2-codex, gpt-5.2-codex-fast, gpt-5.1, gpt-5.1-codex-max, gpt-5.1-codex-mini, grok, kimi-k2.5, gemini-3.1-pro, gemini-3-pro, gemini-3-flash, opus-4.5, sonnet-4.5, composer-1.5, composer-1, composer-2, composer-2-fast"
+        description = "auto, opus-4.7, opus-4.7-fast, opus-4.7-thinking, opus-4.7-thinking-fast, opus-4.6, sonnet-4.6, gpt-5.5, gpt-5.5-fast, gpt-5.4, gpt-5.4-fast, gpt-5.4-mini, gpt-5.4-nano, gpt-5.3-codex, gpt-5.3-codex-fast, gpt-5.3-codex-spark-preview, gpt-5.2, gpt-5.2-codex, gpt-5.2-codex-fast, gpt-5.1, gpt-5.1-codex-max, gpt-5.1-codex-mini, grok, grok-4.3, kimi-k2.5, gemini-3.1-pro, gemini-3-pro, gemini-3-flash, opus-4.5, sonnet-4.5, composer-1.5, composer-1, composer-2, composer-2-fast, composer-2.5, composer-2.5-fast"
     )]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -73,6 +73,21 @@ pub struct CursorAgent {
 // get the model full name
 fn resolve_cursor_model_name<'a>(base_model: &'a str, reasoning: Option<&'a str>) -> &'a str {
     match (base_model, reasoning) {
+        // gpt-5.5 is the one family where cursor's effort suffix differs from
+        // our vk-wide convention (`extra-high` vs `xhigh`). Translate here so
+        // the option ID stays `xhigh` everywhere in vk.
+        ("gpt-5.5", Some("none")) => "gpt-5.5-none",
+        ("gpt-5.5", Some("low")) => "gpt-5.5-low",
+        ("gpt-5.5", Some("medium")) => "gpt-5.5-medium",
+        ("gpt-5.5", Some("high") | None) => "gpt-5.5-high",
+        ("gpt-5.5", Some("xhigh")) => "gpt-5.5-extra-high",
+
+        ("gpt-5.5-fast", Some("none")) => "gpt-5.5-none-fast",
+        ("gpt-5.5-fast", Some("low")) => "gpt-5.5-low-fast",
+        ("gpt-5.5-fast", Some("medium")) => "gpt-5.5-medium-fast",
+        ("gpt-5.5-fast", Some("high") | None) => "gpt-5.5-high-fast",
+        ("gpt-5.5-fast", Some("xhigh")) => "gpt-5.5-extra-high-fast",
+
         ("gpt-5.4", Some("medium")) => "gpt-5.4-medium",
         ("gpt-5.4", Some("high") | None) => "gpt-5.4-high",
         ("gpt-5.4", Some("xhigh")) => "gpt-5.4-xhigh",
@@ -80,6 +95,18 @@ fn resolve_cursor_model_name<'a>(base_model: &'a str, reasoning: Option<&'a str>
         ("gpt-5.4-fast", Some("medium")) => "gpt-5.4-medium-fast",
         ("gpt-5.4-fast", Some("high") | None) => "gpt-5.4-high-fast",
         ("gpt-5.4-fast", Some("xhigh")) => "gpt-5.4-xhigh-fast",
+
+        ("gpt-5.4-mini", Some("none")) => "gpt-5.4-mini-none",
+        ("gpt-5.4-mini", Some("low")) => "gpt-5.4-mini-low",
+        ("gpt-5.4-mini", Some("medium")) => "gpt-5.4-mini-medium",
+        ("gpt-5.4-mini", Some("high") | None) => "gpt-5.4-mini-high",
+        ("gpt-5.4-mini", Some("xhigh")) => "gpt-5.4-mini-xhigh",
+
+        ("gpt-5.4-nano", Some("none")) => "gpt-5.4-nano-none",
+        ("gpt-5.4-nano", Some("low")) => "gpt-5.4-nano-low",
+        ("gpt-5.4-nano", Some("medium")) => "gpt-5.4-nano-medium",
+        ("gpt-5.4-nano", Some("high") | None) => "gpt-5.4-nano-high",
+        ("gpt-5.4-nano", Some("xhigh")) => "gpt-5.4-nano-xhigh",
 
         ("gpt-5.3-codex", Some("low")) => "gpt-5.3-codex-low",
         ("gpt-5.3-codex", Some("medium")) => "gpt-5.3-codex",
@@ -110,8 +137,51 @@ fn resolve_cursor_model_name<'a>(base_model: &'a str, reasoning: Option<&'a str>
         ("gpt-5.1", Some("medium")) => "gpt-5.1",
         ("gpt-5.1", Some("high") | None) => "gpt-5.1-high",
 
-        ("opus-4.6", Some("standard")) => "opus-4.6",
-        ("opus-4.6", Some("thinking") | None) => "opus-4.6-thinking",
+        ("opus-4.7", Some("low")) => "claude-opus-4-7-low",
+        ("opus-4.7", Some("medium")) => "claude-opus-4-7-medium",
+        ("opus-4.7", Some("high") | None) => "claude-opus-4-7-high",
+        ("opus-4.7", Some("xhigh")) => "claude-opus-4-7-xhigh",
+        ("opus-4.7", Some("max")) => "claude-opus-4-7-max",
+
+        ("opus-4.7-fast", Some("low")) => "claude-opus-4-7-low-fast",
+        ("opus-4.7-fast", Some("medium")) => "claude-opus-4-7-medium-fast",
+        ("opus-4.7-fast", Some("high") | None) => "claude-opus-4-7-high-fast",
+        ("opus-4.7-fast", Some("xhigh")) => "claude-opus-4-7-xhigh-fast",
+        ("opus-4.7-fast", Some("max")) => "claude-opus-4-7-max-fast",
+
+        ("opus-4.7-thinking", Some("low")) => "claude-opus-4-7-thinking-low",
+        ("opus-4.7-thinking", Some("medium")) => "claude-opus-4-7-thinking-medium",
+        ("opus-4.7-thinking", Some("high") | None) => "claude-opus-4-7-thinking-high",
+        ("opus-4.7-thinking", Some("xhigh")) => "claude-opus-4-7-thinking-xhigh",
+        ("opus-4.7-thinking", Some("max")) => "claude-opus-4-7-thinking-max",
+
+        ("opus-4.7-thinking-fast", Some("low")) => "claude-opus-4-7-thinking-low-fast",
+        ("opus-4.7-thinking-fast", Some("medium")) => "claude-opus-4-7-thinking-medium-fast",
+        ("opus-4.7-thinking-fast", Some("high") | None) => "claude-opus-4-7-thinking-high-fast",
+        ("opus-4.7-thinking-fast", Some("xhigh")) => "claude-opus-4-7-thinking-xhigh-fast",
+        ("opus-4.7-thinking-fast", Some("max")) => "claude-opus-4-7-thinking-max-fast",
+
+        // Cursor's canonical IDs are inconsistent across Claude versions:
+        // 4.7 is `claude-opus-4-7-<effort>[-thinking][-fast]`, but 4.6 is
+        // `claude-4.6-opus-<effort>[-thinking][-fast]`. Match upstream verbatim.
+        // Old `opus-4.6`/`opus-4.6-thinking` aliases were retired from
+        // `cursor-agent --list-models`; the 4.6 family is now the single
+        // `claude-4.6-opus-*` matrix below (no separate 1M base).
+        //
+        // Cursor only ships {high, max} effort for 4.6, so we expose `high`
+        // as `standard` and `high-thinking` as `thinking` (and likewise
+        // `high-thinking-fast` as `thinking-fast`) — both because the
+        // `standard`/`thinking` vocabulary was already used by opus-4.6 /
+        // opus-4.5 / sonnet-* before this PR (preserving old configs), and
+        // because once effort=high is the only non-max option the `high-`
+        // prefix is redundant.
+        ("opus-4.6", Some("standard") | None) => "claude-4.6-opus-high",
+        ("opus-4.6", Some("max")) => "claude-4.6-opus-max",
+        ("opus-4.6", Some("thinking")) => "claude-4.6-opus-high-thinking",
+        ("opus-4.6", Some("max-thinking")) => "claude-4.6-opus-max-thinking",
+        ("opus-4.6", Some("thinking-fast")) => "claude-4.6-opus-high-thinking-fast",
+        ("opus-4.6", Some("max-thinking-fast")) => "claude-4.6-opus-max-thinking-fast",
+
         ("sonnet-4.6", Some("standard")) => "sonnet-4.6",
         ("sonnet-4.6", Some("thinking") | None) => "sonnet-4.6-thinking",
         ("opus-4.5", Some("standard")) => "opus-4.5",
@@ -125,16 +195,70 @@ fn resolve_cursor_model_name<'a>(base_model: &'a str, reasoning: Option<&'a str>
 
 fn cursor_reasoning_options(base_model: &str) -> Vec<ReasoningOption> {
     match base_model {
+        "gpt-5.5" | "gpt-5.5-fast" => ReasoningOption::from_names(
+            ["none", "low", "medium", "high", "xhigh"].map(String::from),
+        ),
         "gpt-5.4" | "gpt-5.4-fast" => {
             ReasoningOption::from_names(["medium", "high", "xhigh"].map(String::from))
         }
+        "gpt-5.4-mini" | "gpt-5.4-nano" => ReasoningOption::from_names(
+            ["none", "low", "medium", "high", "xhigh"].map(String::from),
+        ),
         "gpt-5.3-codex" | "gpt-5.3-codex-fast" | "gpt-5.2-codex" | "gpt-5.2-codex-fast" => {
             ReasoningOption::from_names(["low", "medium", "high", "xhigh"].map(String::from))
         }
         "gpt-5.2" | "gpt-5.1-codex-max" | "gpt-5.1" => {
             ReasoningOption::from_names(["medium", "high"].map(String::from))
         }
-        "opus-4.6" | "sonnet-4.6" | "opus-4.5" | "sonnet-4.5" => vec![
+        // Cursor's "thinking" toggle and reasoning effort are orthogonal:
+        // non-thinking variants still expose the full low/medium/high/xhigh/max
+        // matrix (effort = hidden reasoning tokens spent before answering;
+        // thinking = whether a separate chain-of-thought block streams).
+        // Same applies to the 4.6 family below — do not consolidate.
+        "opus-4.7" | "opus-4.7-fast" | "opus-4.7-thinking" | "opus-4.7-thinking-fast" => {
+            ReasoningOption::from_names(["low", "medium", "high", "xhigh", "max"].map(String::from))
+        }
+        // 4.6 deliberately uses a single base with six reasoning options
+        // (effort × thinking × fast collapsed in here), unlike 4.7 which
+        // splits into four bases. Cursor's 4.6 matrix is irregular — only
+        // {high, max} effort, and only thinking variants get `-fast` — so
+        // mapping it onto 4.7's "one base per (thinking, fast) tuple" shape
+        // leaves dead reasoning slots (e.g. `low`/`medium`/`xhigh`) and
+        // missing combinations (no non-thinking fast). Collapsing keeps the
+        // dropdown short and lets every visible option resolve to a real ID.
+        "opus-4.6" => vec![
+            ReasoningOption {
+                id: "standard".to_string(),
+                label: "Standard".to_string(),
+                is_default: false,
+            },
+            ReasoningOption {
+                id: "thinking".to_string(),
+                label: "Thinking".to_string(),
+                is_default: true,
+            },
+            ReasoningOption {
+                id: "max".to_string(),
+                label: "Max".to_string(),
+                is_default: false,
+            },
+            ReasoningOption {
+                id: "max-thinking".to_string(),
+                label: "Max Thinking".to_string(),
+                is_default: false,
+            },
+            ReasoningOption {
+                id: "thinking-fast".to_string(),
+                label: "Thinking Fast".to_string(),
+                is_default: false,
+            },
+            ReasoningOption {
+                id: "max-thinking-fast".to_string(),
+                label: "Max Thinking Fast".to_string(),
+                is_default: false,
+            },
+        ],
+        "sonnet-4.6" | "opus-4.5" | "sonnet-4.5" => vec![
             ReasoningOption {
                 id: "standard".to_string(),
                 label: "Standard".to_string(),
@@ -762,9 +886,22 @@ impl StandardCodingAgentExecutor for CursorAgent {
     ) -> Result<futures::stream::BoxStream<'static, json_patch::Patch>, ExecutorError> {
         let models: Vec<ModelInfo> = [
             ("auto", "Auto"),
+            ("composer-2.5", "Composer 2.5"),
+            ("composer-2.5-fast", "Composer 2.5 Fast"),
+            ("composer-2", "Composer 2"),
+            ("composer-2-fast", "Composer 2 Fast"),
+            ("composer-1.5", "Composer 1.5"),
+            ("gpt-5.5", "GPT-5.5"),
+            ("gpt-5.5-fast", "GPT-5.5 Fast"),
             ("gpt-5.4", "GPT-5.4"),
             ("gpt-5.4-fast", "GPT-5.4 Fast"),
+            ("gpt-5.4-mini", "GPT-5.4 Mini"),
+            ("gpt-5.4-nano", "GPT-5.4 Nano"),
             ("gemini-3.1-pro", "Gemini 3.1 Pro"),
+            ("opus-4.7", "Claude 4.7 Opus"),
+            ("opus-4.7-fast", "Claude 4.7 Opus Fast"),
+            ("opus-4.7-thinking", "Claude 4.7 Opus Thinking"),
+            ("opus-4.7-thinking-fast", "Claude 4.7 Opus Thinking Fast"),
             ("opus-4.6", "Claude 4.6 Opus"),
             ("sonnet-4.6", "Claude 4.6 Sonnet"),
             ("gpt-5.3-codex", "GPT-5.3 Codex"),
@@ -781,11 +918,9 @@ impl StandardCodingAgentExecutor for CursorAgent {
             ("gpt-5.1-codex-max", "GPT-5.1 Codex Max"),
             ("gpt-5.1", "GPT-5.1"),
             ("gpt-5.1-codex-mini", "GPT-5.1 Codex Mini"),
+            ("grok-4.3", "Grok 4.3"),
             ("grok", "Grok"),
             ("composer-1", "Composer 1"),
-            ("composer-1.5", "Composer 1.5"),
-            ("composer-2", "Composer 2"),
-            ("composer-2-fast", "Composer 2 Fast"),
         ]
         .into_iter()
         .map(|(id, name)| ModelInfo {

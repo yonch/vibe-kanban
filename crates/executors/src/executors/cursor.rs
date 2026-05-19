@@ -167,11 +167,19 @@ fn resolve_cursor_model_name<'a>(base_model: &'a str, reasoning: Option<&'a str>
         // Old `opus-4.6`/`opus-4.6-thinking` aliases were retired from
         // `cursor-agent --list-models`; the 4.6 family is now the single
         // `claude-4.6-opus-*` matrix below (no separate 1M base).
-        ("opus-4.6", Some("high") | None) => "claude-4.6-opus-high",
+        //
+        // Cursor only ships {high, max} effort for 4.6, so we expose `high`
+        // as `standard` and `high-thinking` as `thinking` (and likewise
+        // `high-thinking-fast` as `thinking-fast`) — both because the
+        // `standard`/`thinking` vocabulary was already used by opus-4.6 /
+        // opus-4.5 / sonnet-* before this PR (preserving old configs), and
+        // because once effort=high is the only non-max option the `high-`
+        // prefix is redundant.
+        ("opus-4.6", Some("standard") | None) => "claude-4.6-opus-high",
         ("opus-4.6", Some("max")) => "claude-4.6-opus-max",
-        ("opus-4.6", Some("high-thinking")) => "claude-4.6-opus-high-thinking",
+        ("opus-4.6", Some("thinking")) => "claude-4.6-opus-high-thinking",
         ("opus-4.6", Some("max-thinking")) => "claude-4.6-opus-max-thinking",
-        ("opus-4.6", Some("high-thinking-fast")) => "claude-4.6-opus-high-thinking-fast",
+        ("opus-4.6", Some("thinking-fast")) => "claude-4.6-opus-high-thinking-fast",
         ("opus-4.6", Some("max-thinking-fast")) => "claude-4.6-opus-max-thinking-fast",
 
         ("sonnet-4.6", Some("standard")) => "sonnet-4.6",
@@ -210,17 +218,38 @@ fn cursor_reasoning_options(base_model: &str) -> Vec<ReasoningOption> {
         "opus-4.7" | "opus-4.7-fast" | "opus-4.7-thinking" | "opus-4.7-thinking-fast" => {
             ReasoningOption::from_names(["low", "medium", "high", "xhigh", "max"].map(String::from))
         }
-        "opus-4.6" => ReasoningOption::from_names(
-            [
-                "high",
-                "max",
-                "high-thinking",
-                "max-thinking",
-                "high-thinking-fast",
-                "max-thinking-fast",
-            ]
-            .map(String::from),
-        ),
+        "opus-4.6" => vec![
+            ReasoningOption {
+                id: "standard".to_string(),
+                label: "Standard".to_string(),
+                is_default: false,
+            },
+            ReasoningOption {
+                id: "thinking".to_string(),
+                label: "Thinking".to_string(),
+                is_default: true,
+            },
+            ReasoningOption {
+                id: "max".to_string(),
+                label: "Max".to_string(),
+                is_default: false,
+            },
+            ReasoningOption {
+                id: "max-thinking".to_string(),
+                label: "Max Thinking".to_string(),
+                is_default: false,
+            },
+            ReasoningOption {
+                id: "thinking-fast".to_string(),
+                label: "Thinking Fast".to_string(),
+                is_default: false,
+            },
+            ReasoningOption {
+                id: "max-thinking-fast".to_string(),
+                label: "Max Thinking Fast".to_string(),
+                is_default: false,
+            },
+        ],
         "sonnet-4.6" | "opus-4.5" | "sonnet-4.5" => vec![
             ReasoningOption {
                 id: "standard".to_string(),

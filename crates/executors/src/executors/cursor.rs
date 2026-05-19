@@ -218,6 +218,14 @@ fn cursor_reasoning_options(base_model: &str) -> Vec<ReasoningOption> {
         "opus-4.7" | "opus-4.7-fast" | "opus-4.7-thinking" | "opus-4.7-thinking-fast" => {
             ReasoningOption::from_names(["low", "medium", "high", "xhigh", "max"].map(String::from))
         }
+        // 4.6 deliberately uses a single base with six reasoning options
+        // (effort × thinking × fast collapsed in here), unlike 4.7 which
+        // splits into four bases. Cursor's 4.6 matrix is irregular — only
+        // {high, max} effort, and only thinking variants get `-fast` — so
+        // mapping it onto 4.7's "one base per (thinking, fast) tuple" shape
+        // leaves dead reasoning slots (e.g. `low`/`medium`/`xhigh`) and
+        // missing combinations (no non-thinking fast). Collapsing keeps the
+        // dropdown short and lets every visible option resolve to a real ID.
         "opus-4.6" => vec![
             ReasoningOption {
                 id: "standard".to_string(),

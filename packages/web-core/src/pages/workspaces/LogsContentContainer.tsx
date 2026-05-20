@@ -1,10 +1,7 @@
 import { useEffect, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '@/shared/lib/utils';
-import {
-  type LogEntry,
-  VirtualizedProcessLogs,
-} from '@/shared/components/VirtualizedProcessLogs';
+import { VirtualizedProcessLogs } from '@/shared/components/VirtualizedProcessLogs';
 import { useLogStream } from '@/shared/hooks/useLogStream';
 import { useLogsPanel } from '@/shared/hooks/useLogsPanel';
 import { TerminalPanelContainer } from '@/shared/components/TerminalPanelContainer';
@@ -74,10 +71,6 @@ export function LogsContentContainer({ className }: LogsContentContainerProps) {
 
   // Tool content - render static content using VirtualizedProcessLogs
   if (content.type === 'tool') {
-    const toolLogs: LogEntry[] = content.content
-      .split('\n')
-      .map((line) => ({ type: 'STDOUT' as const, content: line }));
-
     return (
       <div className={cn('h-full bg-secondary flex flex-col', className)}>
         <div className="px-4 py-2 border-b border-border text-sm font-medium text-normal shrink-0">
@@ -90,7 +83,7 @@ export function LogsContentContainer({ className }: LogsContentContainerProps) {
         )}
         <div className="flex-1 min-h-0">
           <VirtualizedProcessLogs
-            logs={toolLogs}
+            logs={currentLogs}
             error={null}
             searchQuery={searchQuery}
             matchIndices={matchIndices}

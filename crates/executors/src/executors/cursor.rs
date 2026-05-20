@@ -61,7 +61,7 @@ pub struct CursorAgent {
     pub force: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(
-        description = "auto, opus-4.7, opus-4.7-fast, opus-4.7-thinking, opus-4.7-thinking-fast, opus-4.6, sonnet-4.6, gpt-5.5, gpt-5.5-fast, gpt-5.4, gpt-5.4-fast, gpt-5.4-mini, gpt-5.4-nano, gpt-5.3-codex, gpt-5.3-codex-fast, gpt-5.3-codex-spark-preview, gpt-5.2, gpt-5.2-codex, gpt-5.2-codex-fast, gpt-5.1, gpt-5.1-codex-max, gpt-5.1-codex-mini, grok, grok-4.3, kimi-k2.5, gemini-3.1-pro, gemini-3-pro, gemini-3-flash, opus-4.5, sonnet-4.5, composer-1.5, composer-1, composer-2, composer-2-fast, composer-2.5, composer-2.5-fast"
+        description = "auto, opus-4.7, opus-4.7-fast, opus-4.7-thinking, opus-4.7-thinking-fast, opus-4.6, sonnet-4.6, gpt-5.5, gpt-5.5-fast, gpt-5.4, gpt-5.4-fast, gpt-5.4-mini, gpt-5.4-nano, gpt-5.3-codex, gpt-5.3-codex-fast, gpt-5.3-codex-spark-preview, gpt-5.2, gpt-5.2-codex, gpt-5.2-codex-fast, gpt-5.1, gpt-5.1-codex-max, gpt-5.1-codex-mini, grok, grok-4.3, kimi-k2.5, gemini-3.1-pro, gemini-3-flash, gemini-3.5-flash, opus-4.5, sonnet-4.5, composer-1.5, composer-1, composer-2, composer-2-fast, composer-2.5, composer-2.5-fast"
     )]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -910,8 +910,8 @@ impl StandardCodingAgentExecutor for CursorAgent {
             ("kimi-k2.5", "Kimi K2.5"),
             ("opus-4.5", "Claude 4.5 Opus"),
             ("sonnet-4.5", "Claude 4.5 Sonnet"),
-            ("gemini-3-pro", "Gemini 3 Pro"),
             ("gemini-3-flash", "Gemini 3 Flash"),
+            ("gemini-3.5-flash", "Gemini 3.5 Flash"),
             ("gpt-5.2-codex", "GPT-5.2 Codex"),
             ("gpt-5.2-codex-fast", "GPT-5.2 Codex Fast"),
             ("gpt-5.2", "GPT-5.2"),

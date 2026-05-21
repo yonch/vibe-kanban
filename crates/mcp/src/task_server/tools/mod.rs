@@ -435,7 +435,33 @@ mod tests {
 
         assert!(actual.contains("list_workspaces"));
         assert!(actual.contains("delete_workspace"));
+        assert!(actual.contains("get_context"));
         assert!(!actual.contains("output_markdown"));
+    }
+
+    /// `get_context` must stay in the published tool catalog even when the
+    /// server boots without a workspace context (e.g. global-mode MCP launched
+    /// by codex from a directory outside any VK workspace). Stripping it from
+    /// the router hides the tool from `tools/list`, which surprised consumers
+    /// after PR #51's binary refresh. The tool itself reports the no-context
+    /// state by serializing `null`.
+    #[test]
+    fn global_mode_keeps_get_context_when_context_missing() {
+        install_rustls_provider();
+        let server = McpServer::new_global("http://127.0.0.1:3000");
+
+        assert!(
+            server.tool_router.has_route("get_context"),
+            "get_context must remain registered before init even has a chance to drop it"
+        );
+
+        // Simulate the post-init state when fetch_context_at_startup returned None.
+        let mut server = server;
+        server.context = None;
+        assert!(
+            server.tool_router.has_route("get_context"),
+            "get_context must remain advertised when no workspace context is loaded"
+        );
     }
 
     #[test]

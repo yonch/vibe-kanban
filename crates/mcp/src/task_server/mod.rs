@@ -93,11 +93,12 @@ impl McpServer {
     pub async fn init(mut self) -> anyhow::Result<Self> {
         let context = self.fetch_context_at_startup().await?;
 
-        if context.is_none() {
-            self.tool_router.map.remove("get_context");
-            tracing::debug!("VK context not available, get_context tool will not be registered");
+        if context.is_some() {
+            tracing::info!("VK context loaded, get_context will return workspace metadata");
         } else {
-            tracing::info!("VK context loaded, get_context tool available");
+            tracing::debug!(
+                "VK context not available, get_context will report no active workspace"
+            );
         }
 
         self.context = context;

@@ -25,6 +25,14 @@
 //! against the original `Option<T>` types, so the runtime behavior of every tool is
 //! unchanged: a missing field still deserializes to `None`, and an explicit `null`
 //! supplied by a permissive client also deserializes to `None`.
+//!
+//! Exception. A few tool fields are tri-state `Option<Option<T>>` where an explicit
+//! `null` is semantically distinct from "field absent" (e.g. `update_issue.parent_issue_id`,
+//! where `null` clears the parent and absence leaves it unchanged). Those fields are
+//! enumerated in [`preserve_null_fields_for`] and skipped by the sanitizer so the
+//! published schema still advertises `null`. Cursor will continue to reject calls
+//! that supply `null` to those specific fields until upstream fixes nullable
+//! validation, but every other supported client accepts them.
 
 use std::sync::Arc;
 
@@ -32,15 +40,54 @@ use rmcp::{handler::server::tool::ToolRouter, model::JsonObject};
 use serde_json::Value;
 
 /// Rewrite every tool's `input_schema` in `router` to remove `null` from
-/// type unions and `anyOf`/`oneOf` branches.
+/// type unions and `anyOf`/`oneOf` branches, except for the fields listed in
+/// [`preserve_null_fields_for`].
 ///
 /// The rewrite is idempotent: running it twice yields the same schema as
 /// running it once.
 pub fn sanitize_tool_router<S>(router: &mut ToolRouter<S>) {
     for route in router.map.values_mut() {
+        let preserve = preserve_null_fields_for(route.attr.name.as_ref());
         let mut schema: JsonObject = (*route.attr.input_schema).clone();
+
+        // Pull aside any top-level properties whose nullability must survive,
+        // sanitize the rest of the schema, then put them back unchanged.
+        let mut stashed: Vec<(String, Value)> = Vec::new();
+        if !preserve.is_empty()
+            && let Some(Value::Object(props)) = schema.get_mut("properties")
+        {
+            for name in preserve {
+                if let Some(value) = props.remove(*name) {
+                    stashed.push(((*name).to_string(), value));
+                }
+            }
+        }
+
         sanitize_schema_object(&mut schema);
+
+        if !stashed.is_empty()
+            && let Some(Value::Object(props)) = schema.get_mut("properties")
+        {
+            for (name, value) in stashed {
+                props.insert(name, value);
+            }
+        }
+
         route.attr.input_schema = Arc::new(schema);
+    }
+}
+
+/// Top-level properties whose nullability must be preserved in the published
+/// schema because the tool relies on an explicit `null` to express a distinct
+/// operation. Used by [`sanitize_tool_router`].
+pub(crate) fn preserve_null_fields_for(tool_name: &str) -> &'static [&'static str] {
+    match tool_name {
+        // `parent_issue_id` is `Option<Option<Uuid>>`: absent = no change,
+        // explicit `null` = un-nest from parent, UUID = set parent. Stripping
+        // `null` from the schema would remove the un-nest operation from the
+        // MCP surface.
+        "update_issue" => &["parent_issue_id"],
+        _ => &[],
     }
 }
 
@@ -195,6 +242,16 @@ mod tests {
         let mut obj = value.as_object().expect("expected JSON object").clone();
         sanitize_schema_object(&mut obj);
         Value::Object(obj)
+    }
+
+    #[test]
+    fn preserve_list_lists_known_tri_state_fields() {
+        assert_eq!(
+            preserve_null_fields_for("update_issue"),
+            &["parent_issue_id"]
+        );
+        assert!(preserve_null_fields_for("list_issues").is_empty());
+        assert!(preserve_null_fields_for("unknown_tool").is_empty());
     }
 
     #[test]

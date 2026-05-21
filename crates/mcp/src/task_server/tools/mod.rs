@@ -556,6 +556,17 @@ mod tests {
             let schema = serde_json::Value::Object((*tool.input_schema).clone());
             let mut paths = Vec::new();
             collect_null_unions(&schema, "", &mut paths);
+
+            // Tri-state fields documented in `schema_sanitizer::preserve_null_fields_for`
+            // intentionally keep `null` in the published schema; ignore those.
+            let preserved =
+                crate::task_server::schema_sanitizer::preserve_null_fields_for(tool.name.as_ref());
+            paths.retain(|path| {
+                !preserved
+                    .iter()
+                    .any(|field| path.starts_with(&format!("/properties/{field}")))
+            });
+
             if !paths.is_empty() {
                 offenders.push((tool.name.to_string(), paths));
             }
@@ -564,6 +575,34 @@ mod tests {
         assert!(
             offenders.is_empty(),
             "tools still publish JSON-Schema null unions that cursor-agent rejects: {offenders:#?}"
+        );
+    }
+
+    /// `update_issue.parent_issue_id` is `Option<Option<Uuid>>`: an explicit
+    /// `null` un-nests the issue. The sanitizer must leave that field's
+    /// nullability intact so schema-validating clients can still express the
+    /// un-nest operation.
+    #[test]
+    fn update_issue_parent_issue_id_keeps_null_in_schema() {
+        install_rustls_provider();
+        let server = McpServer::new_global("http://127.0.0.1:3000");
+
+        let tool = server
+            .tool_router
+            .get("update_issue")
+            .expect("update_issue tool should be registered in global mode");
+
+        let schema = serde_json::Value::Object((*tool.input_schema).clone());
+        let prop = schema
+            .get("properties")
+            .and_then(|v| v.get("parent_issue_id"))
+            .expect("update_issue schema must expose parent_issue_id");
+
+        let mut paths = Vec::new();
+        collect_null_unions(prop, "", &mut paths);
+        assert!(
+            !paths.is_empty(),
+            "parent_issue_id should still advertise `null` in its schema, got {prop}"
         );
     }
 

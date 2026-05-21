@@ -1,4 +1,5 @@
 mod handler;
+mod schema_sanitizer;
 mod tools;
 
 use std::path::Path;
@@ -6,6 +7,7 @@ use std::path::Path;
 use anyhow::Context;
 use db::models::{requests::ContainerQuery, workspace::WorkspaceContext};
 use rmcp::{handler::server::tool::ToolRouter, schemars};
+use schema_sanitizer::sanitize_tool_router;
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -57,20 +59,24 @@ pub struct McpServer {
 
 impl McpServer {
     pub fn new_global(base_url: &str) -> Self {
+        let mut tool_router = Self::global_mode_router();
+        sanitize_tool_router(&mut tool_router);
         Self {
             client: reqwest::Client::new(),
             base_url: base_url.to_string(),
-            tool_router: Self::global_mode_router(),
+            tool_router,
             context: None,
             mode: McpMode::Global,
         }
     }
 
     pub fn new_orchestrator(base_url: &str) -> Self {
+        let mut tool_router = Self::orchestrator_mode_router();
+        sanitize_tool_router(&mut tool_router);
         Self {
             client: reqwest::Client::new(),
             base_url: base_url.to_string(),
-            tool_router: Self::orchestrator_mode_router(),
+            tool_router,
             context: None,
             mode: McpMode::Orchestrator,
         }

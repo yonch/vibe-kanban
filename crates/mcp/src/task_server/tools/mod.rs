@@ -500,4 +500,107 @@ mod tests {
 
         assert!(serialized.get("orchestrator_session_id").is_none());
     }
+
+    /// Walk a `serde_json::Value` and return every JSON pointer whose containing
+    /// object has a `"type"` array containing `"null"` or an `anyOf`/`oneOf`
+    /// branch consisting only of `{"type": "null"}`. cursor-agent's MCP client
+    /// rejects either shape (forum.cursor.com Nov 2025), so the server must
+    /// publish neither.
+    fn collect_null_unions(value: &serde_json::Value, path: &str, out: &mut Vec<String>) {
+        match value {
+            serde_json::Value::Object(map) => {
+                if let Some(serde_json::Value::Array(items)) = map.get("type")
+                    && items
+                        .iter()
+                        .any(|item| matches!(item, serde_json::Value::String(s) if s == "null"))
+                {
+                    out.push(format!("{path}/type"));
+                }
+
+                for keyword in ["anyOf", "oneOf"] {
+                    if let Some(serde_json::Value::Array(branches)) = map.get(keyword) {
+                        for (idx, branch) in branches.iter().enumerate() {
+                            if let serde_json::Value::Object(branch_map) = branch
+                                && branch_map.get("type")
+                                    == Some(&serde_json::Value::String("null".to_string()))
+                                && branch_map
+                                    .keys()
+                                    .all(|k| matches!(k.as_str(), "type" | "description" | "title"))
+                            {
+                                out.push(format!("{path}/{keyword}/{idx}"));
+                            }
+                        }
+                    }
+                }
+
+                for (key, value) in map.iter() {
+                    collect_null_unions(value, &format!("{path}/{key}"), out);
+                }
+            }
+            serde_json::Value::Array(items) => {
+                for (idx, item) in items.iter().enumerate() {
+                    collect_null_unions(item, &format!("{path}/{idx}"), out);
+                }
+            }
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn published_tool_schemas_have_no_null_union_types() {
+        install_rustls_provider();
+        let server = McpServer::new_global("http://127.0.0.1:3000");
+
+        let mut offenders: Vec<(String, Vec<String>)> = Vec::new();
+        for tool in server.tool_router.list_all() {
+            let schema = serde_json::Value::Object((*tool.input_schema).clone());
+            let mut paths = Vec::new();
+            collect_null_unions(&schema, "", &mut paths);
+            if !paths.is_empty() {
+                offenders.push((tool.name.to_string(), paths));
+            }
+        }
+
+        assert!(
+            offenders.is_empty(),
+            "tools still publish JSON-Schema null unions that cursor-agent rejects: {offenders:#?}"
+        );
+    }
+
+    /// Spot-check the specific tool that triggered this fix: `start_workspace`
+    /// has an `Option<String>` `prompt`, `Option<String>` `variant`, and
+    /// `Option<Uuid>` `issue_id`. After sanitization those should all be
+    /// plain types, not `["string", "null"]`.
+    #[test]
+    fn start_workspace_optional_fields_are_plain_types() {
+        install_rustls_provider();
+        let server = McpServer::new_global("http://127.0.0.1:3000");
+
+        let tool = server
+            .tool_router
+            .get("start_workspace")
+            .expect("start_workspace tool should be registered in global mode");
+
+        let schema = serde_json::Value::Object((*tool.input_schema).clone());
+        let properties = schema
+            .get("properties")
+            .and_then(|v| v.as_object())
+            .expect("schema must have a properties object");
+
+        for field in ["prompt", "variant", "issue_id"] {
+            let prop = properties
+                .get(field)
+                .unwrap_or_else(|| panic!("start_workspace schema missing `{field}`"));
+            if let Some(ty) = prop.get("type") {
+                assert!(
+                    ty.is_string(),
+                    "start_workspace.{field} type should be a single string, got {ty}"
+                );
+            }
+            assert!(
+                prop.get("anyOf").is_none(),
+                "start_workspace.{field} should not retain an anyOf union after sanitization"
+            );
+        }
+    }
 }

@@ -10,7 +10,8 @@ use uuid::Uuid;
 
 use super::McpServer;
 
-const DEFAULT_TIMEOUT_SECONDS: u64 = 1800;
+const DEFAULT_TIMEOUT_SECONDS: u64 = 90;
+const MAX_TRANSPORT_SAFE_TIMEOUT_SECONDS: u64 = 90;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct McpListWorkspacesRequest {
@@ -107,7 +108,7 @@ struct McpWaitExecutionRequest {
     )]
     execution_ids: Vec<Uuid>,
     #[schemars(
-        description = "Maximum time to wait in seconds before returning a timeout response (default: 1800)"
+        description = "Maximum time to wait in seconds before returning a timeout response (default: 90, capped at 90 by the MCP tool transport; call again to continue waiting)"
     )]
     timeout_seconds: Option<u64>,
 }
@@ -296,7 +297,9 @@ impl McpServer {
             return Self::err("At least one execution_id must be provided", None::<&str>);
         }
 
-        let timeout_secs = timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS);
+        let timeout_secs = timeout_seconds
+            .unwrap_or(DEFAULT_TIMEOUT_SECONDS)
+            .min(MAX_TRANSPORT_SAFE_TIMEOUT_SECONDS);
         let url = self.url("/api/execution-processes/wait");
         let payload = serde_json::json!({
             "execution_ids": execution_ids,

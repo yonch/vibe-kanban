@@ -148,11 +148,6 @@ enum CodexSessionAction {
     Review { target: ReviewTarget },
 }
 
-const VIBE_KANBAN_CODEX_DEVELOPER_INSTRUCTIONS: &str = r#"Vibe Kanban execution lifecycle:
-- Do not send a final response while any shell command, test run, dev server, PTY, or tool session you started for this turn is still running.
-- Before finalizing, wait for every required command to reach a terminal state, or explicitly stop it if it is no longer needed.
-- For long checks, keep polling or report progress; do not treat a backgrounded command as completed verification."#;
-
 #[derive(Derivative, Clone, Serialize, Deserialize, TS, JsonSchema)]
 #[derivative(Debug, PartialEq)]
 pub struct Codex {
@@ -527,20 +522,9 @@ impl Codex {
             config,
             base_instructions: self.base_instructions.clone(),
             model_provider: self.model_provider.clone(),
-            developer_instructions: Some(Self::developer_instructions(
-                self.developer_instructions.as_deref(),
-            )),
+            developer_instructions: self.developer_instructions.clone(),
             service_tier,
             ..Default::default()
-        }
-    }
-
-    fn developer_instructions(configured: Option<&str>) -> String {
-        match configured.map(str::trim).filter(|value| !value.is_empty()) {
-            Some(configured) => {
-                format!("{VIBE_KANBAN_CODEX_DEVELOPER_INSTRUCTIONS}\n\n{configured}")
-            }
-            None => VIBE_KANBAN_CODEX_DEVELOPER_INSTRUCTIONS.to_string(),
         }
     }
 
@@ -779,7 +763,7 @@ impl Codex {
 
 #[cfg(test)]
 mod tests {
-    use super::{Codex, VIBE_KANBAN_CODEX_DEVELOPER_INSTRUCTIONS, resolve_model};
+    use super::resolve_model;
 
     #[test]
     fn resolve_model_detects_fast_suffix() {
@@ -795,20 +779,5 @@ mod tests {
             (Some("gpt-5.4-mini"), false)
         );
         assert_eq!(resolve_model(None), (None, false));
-    }
-
-    #[test]
-    fn developer_instructions_include_lifecycle_guard_by_default() {
-        assert_eq!(
-            Codex::developer_instructions(None),
-            VIBE_KANBAN_CODEX_DEVELOPER_INSTRUCTIONS
-        );
-    }
-
-    #[test]
-    fn developer_instructions_preserve_configured_text() {
-        let combined = Codex::developer_instructions(Some("custom instructions"));
-        assert!(combined.starts_with(VIBE_KANBAN_CODEX_DEVELOPER_INSTRUCTIONS));
-        assert!(combined.ends_with("custom instructions"));
     }
 }

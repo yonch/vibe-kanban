@@ -93,12 +93,11 @@ impl McpServer {
     pub async fn init(mut self) -> anyhow::Result<Self> {
         let context = self.fetch_context_at_startup().await?;
 
-        if context.is_some() {
-            tracing::info!("VK context loaded, get_context will return workspace metadata");
+        if context.is_none() {
+            self.tool_router.map.remove("get_context");
+            tracing::debug!("VK context not available, get_context tool will not be registered");
         } else {
-            tracing::debug!(
-                "VK context not available, get_context will report no active workspace"
-            );
+            tracing::info!("VK context loaded, get_context tool available");
         }
 
         self.context = context;
@@ -118,26 +117,7 @@ impl McpServer {
             Ok(Some(ctx)) => Ok(Some(
                 self.build_mcp_context_from_workspace_context(&ctx).await,
             )),
-            Ok(None) if matches!(self.mode(), McpMode::Global) => {
-                tracing::warn!(
-                    path = %normalized_path.display(),
-                    "VK backend returned no workspace for current directory; \
-                     get_context will report no workspace. Check that the cwd \
-                     matches a workspace's container_ref (canonicalized paths, \
-                     symlinks not handled outside of /private/var,/private/tmp)."
-                );
-                Ok(None)
-            }
-            Err(error) if matches!(self.mode(), McpMode::Global) => {
-                tracing::warn!(
-                    path = %normalized_path.display(),
-                    error = %format!("{error:#}"),
-                    "Failed to load VK workspace context; get_context will \
-                     report no workspace. Common causes: backend not running, \
-                     stale port file, or the 2s startup timeout elapsed."
-                );
-                Ok(None)
-            }
+            Ok(None) | Err(_) if matches!(self.mode(), McpMode::Global) => Ok(None),
             Ok(None) => anyhow::bail!(
                 "Failed to load orchestrator MCP context from /api/containers/attempt-context"
             ),
@@ -154,13 +134,8 @@ impl McpServer {
             container_ref: path.to_string_lossy().to_string(),
         };
 
-        // 2s matches `fetch_remote_workspace_context` below; the previous 500ms
-        // ceiling was tight enough to race the backend's cold-start (port-file
-        // read → HTTP → sqlx scan of `workspaces` → JSON encode) and silently
-        // drop the workspace binding for users who were in fact inside a
-        // workspace. Diagnostics for that race went unlogged before this fix.
         let response = tokio::time::timeout(
-            std::time::Duration::from_millis(2000),
+            std::time::Duration::from_millis(500),
             self.client.get(&url).query(&query).send(),
         )
         .await

@@ -108,7 +108,7 @@ struct McpWaitExecutionRequest {
     )]
     execution_ids: Vec<Uuid>,
     #[schemars(
-        description = "Maximum time to wait in seconds before returning a timeout response (default: 90, capped at 90 by the MCP tool transport; call again to continue waiting)"
+        description = "Maximum time to wait in seconds before returning a timeout response (default: 90, capped at 90 by the MCP tool transport; retry with an adjusted timeout if you still need to wait)"
     )]
     timeout_seconds: Option<u64>,
 }
@@ -284,7 +284,7 @@ impl McpServer {
     }
 
     #[tool(
-        description = "Block until an execution reaches a terminal state (completed, failed, or killed) or timeout elapses. When multiple execution IDs are provided, returns as soon as any one reaches a terminal state — call again with the remaining IDs to wait for the next completion."
+        description = "Block until an execution reaches a terminal state (completed, failed, or killed) or timeout elapses. The MCP transport may return `timeout` earlier than the requested timeout; `timeout` means no terminal status was observed, not failure. If you still need to wait, call `wait_execution` again with the same execution ID(s) and an adjusted timeout. When multiple execution IDs are provided, returns as soon as any one reaches a terminal state — call again with the remaining IDs to wait for the next completion."
     )]
     async fn wait_execution(
         &self,

@@ -65,6 +65,10 @@ pub fn sanitize_tool_router<S>(router: &mut ToolRouter<S>) {
 
         sanitize_schema_object(&mut schema);
 
+        if route.attr.name.as_ref() == "start_workspace" {
+            inline_start_workspace_repositories_items(&mut schema);
+        }
+
         if !stashed.is_empty()
             && let Some(Value::Object(props)) = schema.get_mut("properties")
         {
@@ -182,6 +186,38 @@ pub(crate) fn sanitize_schema_object(obj: &mut JsonObject) {
                 }
             }
         }
+    }
+}
+
+/// Inline the `start_workspace.repositories.items` schema so clients that do not
+/// resolve local `$ref` definitions still see the required array-of-objects
+/// shape directly in the published tool schema.
+fn inline_start_workspace_repositories_items(obj: &mut JsonObject) {
+    let ref_path = obj
+        .get("properties")
+        .and_then(Value::as_object)
+        .and_then(|props| props.get("repositories"))
+        .and_then(Value::as_object)
+        .and_then(|repositories| repositories.get("items"))
+        .and_then(Value::as_object)
+        .and_then(|items| items.get("$ref"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+
+    let Some(ref_path) = ref_path else {
+        return;
+    };
+
+    let schema_value = Value::Object(obj.clone());
+    let Some(Value::Object(target)) = schema_value.pointer(ref_path.trim_start_matches('#')) else {
+        return;
+    };
+    let target = target.clone();
+
+    if let Some(Value::Object(props)) = obj.get_mut("properties")
+        && let Some(Value::Object(repositories)) = props.get_mut("repositories")
+    {
+        repositories.insert("items".to_string(), Value::Object(target));
     }
 }
 

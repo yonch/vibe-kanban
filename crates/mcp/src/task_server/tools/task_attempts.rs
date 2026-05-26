@@ -16,7 +16,9 @@ use super::McpServer;
 struct McpWorkspaceRepoInput {
     #[schemars(description = "The repository ID")]
     repo_id: Uuid,
-    #[schemars(description = "The branch for this repository")]
+    #[schemars(
+        description = "The branch that the new workspace should fork from for this repository."
+    )]
     branch: String,
 }
 
@@ -34,7 +36,9 @@ struct StartWorkspaceRequest {
     executor: String,
     #[schemars(description = "Optional executor variant, if needed")]
     variant: Option<String>,
-    #[schemars(description = "Repository selection for the workspace")]
+    #[schemars(
+        description = "Repository selection for the workspace. Each item must include { repo_id: string, branch: string }. The branch is the branch the new workspace should fork from."
+    )]
     repositories: Vec<McpWorkspaceRepoInput>,
     #[schemars(
         description = "Optional issue ID to link the workspace to. When provided, the workspace will be associated with this remote issue."

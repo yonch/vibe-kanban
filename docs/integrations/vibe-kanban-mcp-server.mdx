@@ -149,9 +149,18 @@ Supported relationship types: `blocking`, `related`, `has_duplicate`.
 | `run_session_prompt` | Run a coding-agent prompt inside an existing session | `session_id`<br/>`prompt` | None | Execution details |
 | `get_execution` | Inspect execution status and final message | `execution_id` | None | Execution details |
 
-The `repositories` parameter is an array of objects with:
+The `repositories` parameter is an array of repository objects:
+
+```ts
+repositories: Array<{
+  repo_id: string;
+  branch: string;
+}>
+```
+
+Each repository object has:
 - `repo_id`: The repository ID (UUID)
-- `branch`: The branch for this repository
+- `branch`: The branch the new workspace should fork from for this repository
 
 When `issue_id` is provided, the workspace is automatically linked to the remote issue. If `prompt` is omitted, the linked issue's title and description are used as the workspace prompt.
 

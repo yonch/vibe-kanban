@@ -642,4 +642,73 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn start_workspace_repositories_schema_is_array_of_repo_objects() {
+        install_rustls_provider();
+        let server = McpServer::new_global("http://127.0.0.1:3000");
+
+        let tool = server
+            .tool_router
+            .get("start_workspace")
+            .expect("start_workspace tool should be registered in global mode");
+
+        let schema = serde_json::Value::Object((*tool.input_schema).clone());
+        let properties = schema
+            .get("properties")
+            .and_then(|v| v.as_object())
+            .expect("schema must have a properties object");
+
+        let repositories = properties
+            .get("repositories")
+            .expect("start_workspace schema missing `repositories`");
+
+        assert_eq!(
+            repositories.get("type").and_then(|v| v.as_str()),
+            Some("array")
+        );
+        assert!(
+            repositories
+                .get("description")
+                .and_then(|v| v.as_str())
+                .is_some_and(|description| {
+                    description.contains("{ repo_id: string, branch: string }")
+                        && description.contains("branch the new workspace should fork from")
+                }),
+            "repositories description should document object shape and source, got {repositories}"
+        );
+
+        let items = repositories
+            .get("items")
+            .expect("repositories schema missing array items");
+        assert!(
+            items.get("$ref").is_none(),
+            "repositories items should be inlined so clients see object shape directly, got {items}"
+        );
+
+        assert_eq!(
+            items.get("type").and_then(|v| v.as_str()),
+            Some("object"),
+            "repositories items must be repo objects, got {items}"
+        );
+
+        let repo_properties = items
+            .get("properties")
+            .and_then(|v| v.as_object())
+            .expect("repositories item schema must expose repo_id and branch");
+        assert_eq!(
+            repo_properties
+                .get("repo_id")
+                .and_then(|v| v.get("type"))
+                .and_then(|v| v.as_str()),
+            Some("string")
+        );
+        assert_eq!(
+            repo_properties
+                .get("branch")
+                .and_then(|v| v.get("type"))
+                .and_then(|v| v.as_str()),
+            Some("string")
+        );
+    }
 }

@@ -673,7 +673,7 @@ mod tests {
                 .and_then(|v| v.as_str())
                 .is_some_and(|description| {
                     description.contains("{ repo_id: string, branch: string }")
-                        && description.contains("branch or ref")
+                        && description.contains("branch the new workspace should fork from")
                 }),
             "repositories description should document object shape and source, got {repositories}"
         );

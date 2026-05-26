@@ -63,6 +63,14 @@ const ItemContent: VirtuosoMessageListProps<
   );
 };
 
+function addLogKeys(logs: LogEntry[]): LogEntryWithKey[] {
+  return logs.map((entry, index) => ({
+    ...entry,
+    key: `log-${index}`,
+    originalIndex: index,
+  }));
+}
+
 export function VirtualizedProcessLogs({
   logs,
   error,
@@ -71,44 +79,42 @@ export function VirtualizedProcessLogs({
   currentMatchIndex,
 }: VirtualizedProcessLogsProps) {
   const { t } = useTranslation('tasks');
+  const hasInitializedRef = useRef(logs.length > 0);
   const [channelData, setChannelData] =
-    useState<DataWithScrollModifier<LogEntryWithKey> | null>(null);
+    useState<DataWithScrollModifier<LogEntryWithKey> | null>(() => {
+      const data = addLogKeys(logs);
+      if (logs.length === 0) {
+        return { data };
+      }
+      return { data, scrollModifier: InitialDataScrollModifier };
+    });
   const messageListRef = useRef<VirtuosoMessageListMethods<
     LogEntryWithKey,
     SearchContext
   > | null>(null);
-  const hasInitializedRef = useRef(false);
   const prevCurrentMatchRef = useRef<number | undefined>(undefined);
   const isAtBottomRef = useRef(true);
 
   useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      const logsWithKeys: LogEntryWithKey[] = logs.map((entry, index) => ({
-        ...entry,
-        key: `log-${index}`,
-        originalIndex: index,
-      }));
+    const logsWithKeys = addLogKeys(logs);
 
-      // Use InitialDataScrollModifier (with purgeItemSizes) only on the
-      // very first data load. For all subsequent updates, use ScrollToLastItem
-      // which always jumps to the end — unlike auto-scroll-to-bottom which
-      // only follows if the viewport is already at the bottom.
-      let scrollModifier: ScrollModifier | null = null;
-      if (!hasInitializedRef.current && logs.length > 0) {
-        hasInitializedRef.current = true;
-        scrollModifier = InitialDataScrollModifier;
-      } else if (isAtBottomRef.current) {
-        scrollModifier = ScrollToLastItem;
-      }
+    // Use InitialDataScrollModifier (with purgeItemSizes) only on the
+    // very first data load. For all subsequent updates, use ScrollToLastItem
+    // which always jumps to the end — unlike auto-scroll-to-bottom which
+    // only follows if the viewport is already at the bottom.
+    let scrollModifier: ScrollModifier | null = null;
+    if (!hasInitializedRef.current && logs.length > 0) {
+      hasInitializedRef.current = true;
+      scrollModifier = InitialDataScrollModifier;
+    } else if (isAtBottomRef.current) {
+      scrollModifier = ScrollToLastItem;
+    }
 
-      if (scrollModifier) {
-        setChannelData({ data: logsWithKeys, scrollModifier });
-      } else {
-        setChannelData({ data: logsWithKeys });
-      }
-    }, 100);
-
-    return () => clearTimeout(timeoutId);
+    if (scrollModifier) {
+      setChannelData({ data: logsWithKeys, scrollModifier });
+    } else {
+      setChannelData({ data: logsWithKeys });
+    }
   }, [logs]);
 
   // Scroll to current match when it changes

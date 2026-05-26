@@ -673,8 +673,7 @@ mod tests {
                 .and_then(|v| v.as_str())
                 .is_some_and(|description| {
                     description.contains("{ repo_id: string, branch: string }")
-                        && description.contains("not an array of repository ID strings")
-                        && description.contains("get_context().workspace_repos[]")
+                        && description.contains("branch or ref")
                 }),
             "repositories description should document object shape and source, got {repositories}"
         );

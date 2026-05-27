@@ -1,4 +1,10 @@
-import { useCallback, useEffect, useLayoutEffect, useRef } from 'react';
+import {
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import { useVirtualizer } from '@tanstack/react-virtual';
 import { WarningCircleIcon } from '@phosphor-icons/react/dist/ssr';
@@ -260,6 +266,7 @@ export function VirtualizedProcessLogs({
   }
 
   const virtualItems = virtualizer.getVirtualItems();
+  const matchIndexSet = useMemo(() => new Set(matchIndices), [matchIndices]);
 
   return (
     <div
@@ -276,7 +283,7 @@ export function VirtualizedProcessLogs({
             return null;
           }
 
-          const isMatch = matchIndices.includes(virtualItem.index);
+          const isMatch = matchIndexSet.has(virtualItem.index);
           const isCurrentMatch =
             matchIndices[currentMatchIndex] === virtualItem.index;
 

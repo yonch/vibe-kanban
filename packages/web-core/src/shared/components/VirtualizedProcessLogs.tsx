@@ -89,6 +89,37 @@ export function VirtualizedProcessLogs({
   );
 
   useEffect(() => {
+    virtualizer.shouldAdjustScrollPositionOnItemSizeChange = (
+      item,
+      _delta,
+      instance
+    ) => {
+      const scrollElement = scrollRef.current;
+      const viewportHeight =
+        scrollElement?.clientHeight ?? instance.scrollRect?.height ?? 0;
+      const scrollOffset =
+        scrollElement?.scrollTop ?? instance.scrollOffset ?? 0;
+      const totalScrollableSize =
+        scrollElement?.scrollHeight ?? instance.getTotalSize();
+      const remainingDistance =
+        totalScrollableSize - (scrollOffset + viewportHeight);
+      const isItemFullyAboveViewport = item.end <= scrollOffset;
+      const isBottomLocked =
+        isAtBottomRef.current || isAutoScrollingRef.current;
+
+      return (
+        !isBottomLocked &&
+        isItemFullyAboveViewport &&
+        remainingDistance > NEAR_BOTTOM_THRESHOLD_PX
+      );
+    };
+
+    return () => {
+      virtualizer.shouldAdjustScrollPositionOnItemSizeChange = undefined;
+    };
+  }, [virtualizer]);
+
+  useEffect(() => {
     return () => {
       if (scrollFrameRef.current !== null) {
         cancelAnimationFrame(scrollFrameRef.current);

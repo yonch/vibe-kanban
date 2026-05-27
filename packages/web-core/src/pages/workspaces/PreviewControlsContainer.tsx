@@ -84,6 +84,7 @@ export function PreviewControlsContainer({
       activeProcessId={activeProcess?.id ?? null}
       logsContent={
         <VirtualizedProcessLogs
+          key={activeProcess?.id ?? 'none'}
           logs={logs}
           error={logsError}
           searchQuery=""

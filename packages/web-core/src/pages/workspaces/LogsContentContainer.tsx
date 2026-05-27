@@ -83,6 +83,7 @@ export function LogsContentContainer({ className }: LogsContentContainerProps) {
         )}
         <div className="flex-1 min-h-0">
           <VirtualizedProcessLogs
+            key={`tool:${content.toolName}:${content.command ?? ''}`}
             logs={currentLogs}
             error={null}
             searchQuery={searchQuery}

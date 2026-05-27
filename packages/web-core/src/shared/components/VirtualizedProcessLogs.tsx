@@ -1,20 +1,14 @@
-import { useEffect, useRef, useState } from 'react';
-import { useTranslation } from 'react-i18next';
 import {
-  DataWithScrollModifier,
-  ScrollModifier,
-  VirtuosoMessageList,
-  VirtuosoMessageListLicense,
-  VirtuosoMessageListMethods,
-  VirtuosoMessageListProps,
-} from '@virtuoso.dev/message-list';
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+} from 'react';
+import { useTranslation } from 'react-i18next';
+import { useVirtualizer } from '@tanstack/react-virtual';
 import { WarningCircleIcon } from '@phosphor-icons/react/dist/ssr';
 import RawLogText from '@/shared/components/RawLogText';
-import {
-  INITIAL_TOP_ITEM,
-  InitialDataScrollModifier,
-  ScrollToBottomModifier as ScrollToLastItem,
-} from '@/shared/lib/virtuoso-modifiers';
 import type { PatchType } from 'shared/types';
 
 export type LogEntry = Extract<
@@ -30,38 +24,12 @@ export interface VirtualizedProcessLogsProps {
   currentMatchIndex: number;
 }
 
-type LogEntryWithKey = LogEntry & { key: string; originalIndex: number };
-
-interface SearchContext {
-  searchQuery: string;
-  matchIndices: number[];
-  currentMatchIndex: number;
-}
-
-const computeItemKey: VirtuosoMessageListProps<
-  LogEntryWithKey,
-  SearchContext
->['computeItemKey'] = ({ data }) => data.key;
-
-const ItemContent: VirtuosoMessageListProps<
-  LogEntryWithKey,
-  SearchContext
->['ItemContent'] = ({ data, context }) => {
-  const isMatch = context.matchIndices.includes(data.originalIndex);
-  const isCurrentMatch =
-    context.matchIndices[context.currentMatchIndex] === data.originalIndex;
-
-  return (
-    <RawLogText
-      content={data.content}
-      channel={data.type === 'STDERR' ? 'stderr' : 'stdout'}
-      className="text-sm px-4 py-1"
-      linkifyUrls
-      searchQuery={isMatch ? context.searchQuery : undefined}
-      isCurrentMatch={isCurrentMatch}
-    />
-  );
-};
+const ESTIMATED_LOG_ROW_HEIGHT = 28;
+const LOG_OVERSCAN = 12;
+const NEAR_BOTTOM_THRESHOLD_PX = 24;
+const AUTO_SCROLL_RELEASE_MS = 150;
+const MATCH_SCROLL_PAUSE_MS = 500;
+const USER_SCROLL_UP_THRESHOLD_PX = 5;
 
 export function VirtualizedProcessLogs({
   logs,
@@ -71,62 +39,217 @@ export function VirtualizedProcessLogs({
   currentMatchIndex,
 }: VirtualizedProcessLogsProps) {
   const { t } = useTranslation('tasks');
-  const [channelData, setChannelData] =
-    useState<DataWithScrollModifier<LogEntryWithKey> | null>(null);
-  const messageListRef = useRef<VirtuosoMessageListMethods<
-    LogEntryWithKey,
-    SearchContext
-  > | null>(null);
-  const hasInitializedRef = useRef(false);
-  const prevCurrentMatchRef = useRef<number | undefined>(undefined);
+  const scrollRef = useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = useRef(true);
+  const prevLogsRef = useRef<LogEntry[] | null>(null);
+  const prevLogsLengthRef = useRef(0);
+  const prevMatchTargetRef = useRef<string | null>(null);
+  const lastScrollTopRef = useRef(0);
+  const scrollFrameRef = useRef<number | null>(null);
+  const isAutoScrollingRef = useRef(false);
+  const isMatchScrollInProgressRef = useRef(false);
+  const autoScrollReleaseTimerRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+  const matchScrollReleaseTimerRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+
+  const virtualizer = useVirtualizer({
+    count: logs.length,
+    getScrollElement: () => scrollRef.current,
+    estimateSize: () => ESTIMATED_LOG_ROW_HEIGHT,
+    overscan: LOG_OVERSCAN,
+    getItemKey: (index) => `log-${index}`,
+  });
+
+  const totalSize = virtualizer.getTotalSize();
+
+  const updateBottomState = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) {
+      isAtBottomRef.current = true;
+      return;
+    }
+    isAtBottomRef.current =
+      el.scrollHeight - el.scrollTop - el.clientHeight <=
+      NEAR_BOTTOM_THRESHOLD_PX;
+  }, []);
+
+  const scheduleScrollToIndex = useCallback(
+    (
+      index: number,
+      options: { align: 'start' | 'center' | 'end'; behavior: ScrollBehavior }
+    ) => {
+      if (scrollFrameRef.current !== null) {
+        cancelAnimationFrame(scrollFrameRef.current);
+      }
+      if (autoScrollReleaseTimerRef.current !== null) {
+        clearTimeout(autoScrollReleaseTimerRef.current);
+      }
+      isAutoScrollingRef.current = true;
+
+      scrollFrameRef.current = requestAnimationFrame(() => {
+        scrollFrameRef.current = null;
+        virtualizer.scrollToIndex(index, options);
+        const releaseDelay =
+          options.behavior === 'smooth'
+            ? MATCH_SCROLL_PAUSE_MS
+            : AUTO_SCROLL_RELEASE_MS;
+        autoScrollReleaseTimerRef.current = setTimeout(() => {
+          isAutoScrollingRef.current = false;
+          updateBottomState();
+        }, releaseDelay);
+      });
+    },
+    [updateBottomState, virtualizer]
+  );
 
   useEffect(() => {
-    const timeoutId = setTimeout(() => {
-      const logsWithKeys: LogEntryWithKey[] = logs.map((entry, index) => ({
-        ...entry,
-        key: `log-${index}`,
-        originalIndex: index,
-      }));
-
-      // Use InitialDataScrollModifier (with purgeItemSizes) only on the
-      // very first data load. For all subsequent updates, use ScrollToLastItem
-      // which always jumps to the end — unlike auto-scroll-to-bottom which
-      // only follows if the viewport is already at the bottom.
-      let scrollModifier: ScrollModifier | null = null;
-      if (!hasInitializedRef.current && logs.length > 0) {
-        hasInitializedRef.current = true;
-        scrollModifier = InitialDataScrollModifier;
-      } else if (isAtBottomRef.current) {
-        scrollModifier = ScrollToLastItem;
+    return () => {
+      if (scrollFrameRef.current !== null) {
+        cancelAnimationFrame(scrollFrameRef.current);
       }
-
-      if (scrollModifier) {
-        setChannelData({ data: logsWithKeys, scrollModifier });
-      } else {
-        setChannelData({ data: logsWithKeys });
+      if (autoScrollReleaseTimerRef.current !== null) {
+        clearTimeout(autoScrollReleaseTimerRef.current);
       }
-    }, 100);
+      if (matchScrollReleaseTimerRef.current !== null) {
+        clearTimeout(matchScrollReleaseTimerRef.current);
+      }
+    };
+  }, []);
 
-    return () => clearTimeout(timeoutId);
-  }, [logs]);
+  useLayoutEffect(() => {
+    const previousLogs = prevLogsRef.current;
+    const previousLength = prevLogsLengthRef.current;
+    prevLogsRef.current = logs;
+    prevLogsLengthRef.current = logs.length;
+
+    if (logs.length === 0) {
+      isAtBottomRef.current = true;
+      return;
+    }
+
+    const isInitialLoad = previousLength === 0;
+    const appendedLogs = logs.length > previousLength;
+    const replacedLogs =
+      previousLogs !== null &&
+      previousLogs !== logs &&
+      logs.length <= previousLength;
+    if (
+      !isMatchScrollInProgressRef.current &&
+      (isInitialLoad ||
+        ((appendedLogs || replacedLogs) && isAtBottomRef.current))
+    ) {
+      scheduleScrollToIndex(logs.length - 1, {
+        align: 'end',
+        behavior: 'auto',
+      });
+    }
+  }, [logs, scheduleScrollToIndex]);
+
+  useLayoutEffect(() => {
+    if (
+      logs.length > 0 &&
+      !isMatchScrollInProgressRef.current &&
+      (isAtBottomRef.current || isAutoScrollingRef.current)
+    ) {
+      scheduleScrollToIndex(logs.length - 1, {
+        align: 'end',
+        behavior: 'auto',
+      });
+    }
+  }, [logs.length, scheduleScrollToIndex, totalSize]);
 
   // Scroll to current match when it changes
-  useEffect(() => {
-    if (
-      matchIndices.length > 0 &&
-      currentMatchIndex >= 0 &&
-      currentMatchIndex !== prevCurrentMatchRef.current
-    ) {
-      const logIndex = matchIndices[currentMatchIndex];
-      messageListRef.current?.scrollToItem({
-        index: logIndex,
-        align: 'center',
-        behavior: 'smooth',
-      });
-      prevCurrentMatchRef.current = currentMatchIndex;
+  useLayoutEffect(() => {
+    if (matchIndices.length === 0 || currentMatchIndex < 0) {
+      prevMatchTargetRef.current = null;
+      isMatchScrollInProgressRef.current = false;
+      if (matchScrollReleaseTimerRef.current !== null) {
+        clearTimeout(matchScrollReleaseTimerRef.current);
+        matchScrollReleaseTimerRef.current = null;
+      }
+      return;
     }
-  }, [currentMatchIndex, matchIndices]);
+
+    const logIndex = matchIndices[currentMatchIndex];
+    if (logIndex === undefined) {
+      prevMatchTargetRef.current = null;
+      isMatchScrollInProgressRef.current = false;
+      if (matchScrollReleaseTimerRef.current !== null) {
+        clearTimeout(matchScrollReleaseTimerRef.current);
+        matchScrollReleaseTimerRef.current = null;
+      }
+      return;
+    }
+
+    const target = `${searchQuery}:${logIndex}`;
+    if (target === prevMatchTargetRef.current) {
+      return;
+    }
+
+    isMatchScrollInProgressRef.current = true;
+    if (matchScrollReleaseTimerRef.current !== null) {
+      clearTimeout(matchScrollReleaseTimerRef.current);
+    }
+    scheduleScrollToIndex(logIndex, {
+      align: 'center',
+      behavior: 'smooth',
+    });
+    matchScrollReleaseTimerRef.current = setTimeout(() => {
+      isMatchScrollInProgressRef.current = false;
+      matchScrollReleaseTimerRef.current = null;
+      updateBottomState();
+    }, MATCH_SCROLL_PAUSE_MS);
+    prevMatchTargetRef.current = target;
+  }, [
+    currentMatchIndex,
+    matchIndices,
+    scheduleScrollToIndex,
+    searchQuery,
+    updateBottomState,
+  ]);
+
+  const handleScroll = useCallback(() => {
+    const el = scrollRef.current;
+    const scrollTop = el?.scrollTop ?? 0;
+    const isScrollingUp =
+      lastScrollTopRef.current - scrollTop > USER_SCROLL_UP_THRESHOLD_PX;
+    lastScrollTopRef.current = scrollTop;
+
+    if (isAutoScrollingRef.current && !isScrollingUp) {
+      return;
+    }
+    if (isAutoScrollingRef.current) {
+      isAutoScrollingRef.current = false;
+      isMatchScrollInProgressRef.current = false;
+      if (autoScrollReleaseTimerRef.current !== null) {
+        clearTimeout(autoScrollReleaseTimerRef.current);
+        autoScrollReleaseTimerRef.current = null;
+      }
+      if (matchScrollReleaseTimerRef.current !== null) {
+        clearTimeout(matchScrollReleaseTimerRef.current);
+        matchScrollReleaseTimerRef.current = null;
+      }
+    }
+    updateBottomState();
+  }, [updateBottomState]);
+
+  const handleUserScrollIntent = useCallback(() => {
+    isAutoScrollingRef.current = false;
+    isMatchScrollInProgressRef.current = false;
+    if (autoScrollReleaseTimerRef.current !== null) {
+      clearTimeout(autoScrollReleaseTimerRef.current);
+      autoScrollReleaseTimerRef.current = null;
+    }
+    if (matchScrollReleaseTimerRef.current !== null) {
+      clearTimeout(matchScrollReleaseTimerRef.current);
+      matchScrollReleaseTimerRef.current = null;
+    }
+  }, []);
+
+  const matchIndexSet = useMemo(() => new Set(matchIndices), [matchIndices]);
 
   if (logs.length === 0 && !error) {
     return (
@@ -149,30 +272,49 @@ export function VirtualizedProcessLogs({
     );
   }
 
-  const context: SearchContext = {
-    searchQuery,
-    matchIndices,
-    currentMatchIndex,
-  };
+  const virtualItems = virtualizer.getVirtualItems();
 
   return (
-    <div className="virtuoso-license-wrapper h-full overflow-hidden">
-      <VirtuosoMessageListLicense
-        licenseKey={import.meta.env.VITE_PUBLIC_REACT_VIRTUOSO_LICENSE_KEY}
-      >
-        <VirtuosoMessageList<LogEntryWithKey, SearchContext>
-          ref={messageListRef}
-          className="h-full"
-          data={channelData}
-          context={context}
-          initialLocation={INITIAL_TOP_ITEM}
-          onScroll={(location) => {
-            isAtBottomRef.current = location.isAtBottom;
-          }}
-          computeItemKey={computeItemKey}
-          ItemContent={ItemContent}
-        />
-      </VirtuosoMessageListLicense>
+    <div
+      ref={scrollRef}
+      className="h-full overflow-auto"
+      onScroll={handleScroll}
+      onWheel={handleUserScrollIntent}
+      onTouchMove={handleUserScrollIntent}
+    >
+      <div className="relative w-full" style={{ height: `${totalSize}px` }}>
+        {virtualItems.map((virtualItem) => {
+          const log = logs[virtualItem.index];
+          if (!log) {
+            return null;
+          }
+
+          const isMatch = matchIndexSet.has(virtualItem.index);
+          const isCurrentMatch =
+            matchIndices[currentMatchIndex] === virtualItem.index;
+
+          return (
+            <div
+              key={virtualItem.key}
+              ref={virtualizer.measureElement}
+              data-index={virtualItem.index}
+              className="absolute left-0 top-0 w-full"
+              style={{
+                transform: `translateY(${virtualItem.start}px)`,
+              }}
+            >
+              <RawLogText
+                content={log.content}
+                channel={log.type === 'STDERR' ? 'stderr' : 'stdout'}
+                className="text-sm px-4 py-1"
+                linkifyUrls
+                searchQuery={isMatch ? searchQuery : undefined}
+                isCurrentMatch={isCurrentMatch}
+              />
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

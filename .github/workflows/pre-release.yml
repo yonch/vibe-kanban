@@ -164,7 +164,6 @@ jobs:
     needs: bump-version
     runs-on: ubuntu-24.04
     env:
-      VITE_PUBLIC_REACT_VIRTUOSO_LICENSE_KEY: ${{ secrets.PUBLIC_REACT_VIRTUOSO_LICENSE_KEY }}
       VITE_VK_SHARED_API_BASE: ${{ secrets.VK_SHARED_API_BASE }}
     steps:
       - uses: actions/checkout@v6

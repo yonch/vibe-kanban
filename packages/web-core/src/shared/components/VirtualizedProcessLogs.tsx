@@ -19,7 +19,7 @@ export interface VirtualizedProcessLogsProps {
 }
 
 const ESTIMATED_LOG_ROW_HEIGHT = 28;
-const LOG_OVERSCAN = 40;
+const LOG_OVERSCAN = 12;
 const NEAR_BOTTOM_THRESHOLD_PX = 24;
 
 export function VirtualizedProcessLogs({

@@ -366,7 +366,9 @@
       "gitCliNotLoggedIn": "Git n'est pas authentifié. Exécutez \"gh auth login\" (ou configurez les identifiants Git) et réessayez.",
       "gitCliNotInstalled": "Git CLI n'est pas installé. Installez Git pour créer une PR.",
       "targetBranchNotFound": "La branche cible '{{branch}}' n'existe pas sur le dépôt distant. Veuillez vous assurer que la branche existe avant de créer une pull request."
-    }
+    },
+    "squashMergeLabel": "Également squash-merge la PR",
+    "squashMergeDraftHint": "impossible de fusionner les PR en brouillon"
   },
   "prComments": {
     "dialog": {

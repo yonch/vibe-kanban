@@ -85,7 +85,9 @@
       "gitCliNotLoggedIn": "Git이 인증되지 않았습니다. \"gh auth login\"을 실행하거나 Git 자격 증명을 설정한 후 다시 시도하세요.",
       "gitCliNotInstalled": "Git CLI가 설치되어 있지 않습니다. PR을 생성하려면 Git을 설치하세요.",
       "targetBranchNotFound": "대상 브랜치 '{{branch}}'이(가) 원격에 존재하지 않습니다. 풀 리퀘스트를 생성하기 전에 브랜치가 존재하는지 확인하세요."
-    }
+    },
+    "squashMergeLabel": "PR을 스쿼시 머지로 함께 병합",
+    "squashMergeDraftHint": "초안 PR은 병합할 수 없습니다"
   },
   "branches": {
     "changeTarget": {

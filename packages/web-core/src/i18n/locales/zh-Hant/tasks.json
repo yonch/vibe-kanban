@@ -284,7 +284,9 @@
       "gitCliNotLoggedIn": "Git 尚未驗證。請執行 gh auth login（或設定 Git 憑證）後重試。",
       "gitCliNotInstalled": "未安裝 Git CLI。請安裝 Git 以建立 PR。",
       "targetBranchNotFound": "遠端不存在目標分支 {{branch}}。建立 PR 前請確認該分支存在。"
-    }
+    },
+    "squashMergeLabel": "同時壓縮合併（squash-merge）此 PR",
+    "squashMergeDraftHint": "草稿 PR 無法合併"
   },
   "prComments": {
     "dialog": {

@@ -85,7 +85,9 @@
       "gitCliNotLoggedIn": "Git no está autenticado. Ejecuta \"gh auth login\" (o configura las credenciales de Git) e inténtalo de nuevo.",
       "gitCliNotInstalled": "Git CLI no está instalado. Instala Git para crear una PR.",
       "targetBranchNotFound": "La rama objetivo '{{branch}}' no existe en el remoto. Por favor, asegúrese de que la rama exista antes de crear una solicitud de extracción."
-    }
+    },
+    "squashMergeLabel": "También fusionar (squash) el PR",
+    "squashMergeDraftHint": "no se pueden fusionar PRs en borrador"
   },
   "branches": {
     "changeTarget": {

@@ -85,7 +85,9 @@
       "gitCliNotLoggedIn": "Gitが認証されていません。\"gh auth login\" を実行するかGitの認証情報を設定してから再試行してください。",
       "gitCliNotInstalled": "Git CLIがインストールされていません。PRを作成するにはGitをインストールしてください。",
       "targetBranchNotFound": "ターゲットブランチ '{{branch}}' がリモートに存在しません。プルリクエストを作成する前にブランチが存在することを確認してください。"
-    }
+    },
+    "squashMergeLabel": "PRをスカッシュマージする",
+    "squashMergeDraftHint": "下書きのPRはマージできません"
   },
   "branches": {
     "changeTarget": {

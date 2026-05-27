@@ -21,6 +21,7 @@ export interface VirtualizedProcessLogsProps {
 const ESTIMATED_LOG_ROW_HEIGHT = 28;
 const LOG_OVERSCAN = 12;
 const NEAR_BOTTOM_THRESHOLD_PX = 24;
+const MATCH_SCROLL_PAUSE_MS = 500;
 
 export function VirtualizedProcessLogs({
   logs,
@@ -38,7 +39,11 @@ export function VirtualizedProcessLogs({
   const lastScrollTopRef = useRef(0);
   const scrollFrameRef = useRef<number | null>(null);
   const isAutoScrollingRef = useRef(false);
+  const isMatchScrollInProgressRef = useRef(false);
   const autoScrollReleaseTimerRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
+  const matchScrollReleaseTimerRef = useRef<ReturnType<
     typeof setTimeout
   > | null>(null);
 
@@ -96,6 +101,9 @@ export function VirtualizedProcessLogs({
       if (autoScrollReleaseTimerRef.current !== null) {
         clearTimeout(autoScrollReleaseTimerRef.current);
       }
+      if (matchScrollReleaseTimerRef.current !== null) {
+        clearTimeout(matchScrollReleaseTimerRef.current);
+      }
     };
   }, []);
 
@@ -117,8 +125,9 @@ export function VirtualizedProcessLogs({
       previousLogs !== logs &&
       logs.length <= previousLength;
     if (
-      isInitialLoad ||
-      ((appendedLogs || replacedLogs) && isAtBottomRef.current)
+      !isMatchScrollInProgressRef.current &&
+      (isInitialLoad ||
+        ((appendedLogs || replacedLogs) && isAtBottomRef.current))
     ) {
       scheduleScrollToIndex(logs.length - 1, {
         align: 'end',
@@ -130,6 +139,7 @@ export function VirtualizedProcessLogs({
   useLayoutEffect(() => {
     if (
       logs.length > 0 &&
+      !isMatchScrollInProgressRef.current &&
       (isAtBottomRef.current || isAutoScrollingRef.current)
     ) {
       scheduleScrollToIndex(logs.length - 1, {
@@ -143,12 +153,22 @@ export function VirtualizedProcessLogs({
   useLayoutEffect(() => {
     if (matchIndices.length === 0 || currentMatchIndex < 0) {
       prevMatchTargetRef.current = null;
+      isMatchScrollInProgressRef.current = false;
+      if (matchScrollReleaseTimerRef.current !== null) {
+        clearTimeout(matchScrollReleaseTimerRef.current);
+        matchScrollReleaseTimerRef.current = null;
+      }
       return;
     }
 
     const logIndex = matchIndices[currentMatchIndex];
     if (logIndex === undefined) {
       prevMatchTargetRef.current = null;
+      isMatchScrollInProgressRef.current = false;
+      if (matchScrollReleaseTimerRef.current !== null) {
+        clearTimeout(matchScrollReleaseTimerRef.current);
+        matchScrollReleaseTimerRef.current = null;
+      }
       return;
     }
 
@@ -157,12 +177,27 @@ export function VirtualizedProcessLogs({
       return;
     }
 
+    isMatchScrollInProgressRef.current = true;
+    if (matchScrollReleaseTimerRef.current !== null) {
+      clearTimeout(matchScrollReleaseTimerRef.current);
+    }
     scheduleScrollToIndex(logIndex, {
       align: 'center',
       behavior: 'smooth',
     });
+    matchScrollReleaseTimerRef.current = setTimeout(() => {
+      isMatchScrollInProgressRef.current = false;
+      matchScrollReleaseTimerRef.current = null;
+      updateBottomState();
+    }, MATCH_SCROLL_PAUSE_MS);
     prevMatchTargetRef.current = target;
-  }, [currentMatchIndex, matchIndices, scheduleScrollToIndex, searchQuery]);
+  }, [
+    currentMatchIndex,
+    matchIndices,
+    scheduleScrollToIndex,
+    searchQuery,
+    updateBottomState,
+  ]);
 
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
@@ -175,9 +210,14 @@ export function VirtualizedProcessLogs({
     }
     if (isAutoScrollingRef.current) {
       isAutoScrollingRef.current = false;
+      isMatchScrollInProgressRef.current = false;
       if (autoScrollReleaseTimerRef.current !== null) {
         clearTimeout(autoScrollReleaseTimerRef.current);
         autoScrollReleaseTimerRef.current = null;
+      }
+      if (matchScrollReleaseTimerRef.current !== null) {
+        clearTimeout(matchScrollReleaseTimerRef.current);
+        matchScrollReleaseTimerRef.current = null;
       }
     }
     updateBottomState();
@@ -185,9 +225,14 @@ export function VirtualizedProcessLogs({
 
   const handleUserScrollIntent = useCallback(() => {
     isAutoScrollingRef.current = false;
+    isMatchScrollInProgressRef.current = false;
     if (autoScrollReleaseTimerRef.current !== null) {
       clearTimeout(autoScrollReleaseTimerRef.current);
       autoScrollReleaseTimerRef.current = null;
+    }
+    if (matchScrollReleaseTimerRef.current !== null) {
+      clearTimeout(matchScrollReleaseTimerRef.current);
+      matchScrollReleaseTimerRef.current = null;
     }
   }, []);
 

@@ -244,6 +244,8 @@ export function VirtualizedProcessLogs({
     }
   }, []);
 
+  const matchIndexSet = useMemo(() => new Set(matchIndices), [matchIndices]);
+
   if (logs.length === 0 && !error) {
     return (
       <div className="h-full flex items-center justify-center">
@@ -266,7 +268,6 @@ export function VirtualizedProcessLogs({
   }
 
   const virtualItems = virtualizer.getVirtualItems();
-  const matchIndexSet = useMemo(() => new Set(matchIndices), [matchIndices]);
 
   return (
     <div

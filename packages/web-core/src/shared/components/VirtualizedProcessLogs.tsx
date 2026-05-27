@@ -27,6 +27,7 @@ export interface VirtualizedProcessLogsProps {
 const ESTIMATED_LOG_ROW_HEIGHT = 28;
 const LOG_OVERSCAN = 12;
 const NEAR_BOTTOM_THRESHOLD_PX = 24;
+const AUTO_SCROLL_RELEASE_MS = 150;
 const MATCH_SCROLL_PAUSE_MS = 500;
 const USER_SCROLL_UP_THRESHOLD_PX = 5;
 
@@ -91,10 +92,14 @@ export function VirtualizedProcessLogs({
       scrollFrameRef.current = requestAnimationFrame(() => {
         scrollFrameRef.current = null;
         virtualizer.scrollToIndex(index, options);
+        const releaseDelay =
+          options.behavior === 'smooth'
+            ? MATCH_SCROLL_PAUSE_MS
+            : AUTO_SCROLL_RELEASE_MS;
         autoScrollReleaseTimerRef.current = setTimeout(() => {
           isAutoScrollingRef.current = false;
           updateBottomState();
-        }, 150);
+        }, releaseDelay);
       });
     },
     [updateBottomState, virtualizer]

@@ -35,6 +35,10 @@ export function VirtualizedProcessLogs({
   const prevLogsLengthRef = useRef(0);
   const prevCurrentMatchRef = useRef<number | undefined>(undefined);
   const scrollFrameRef = useRef<number | null>(null);
+  const isAutoScrollingRef = useRef(false);
+  const autoScrollReleaseTimerRef = useRef<ReturnType<
+    typeof setTimeout
+  > | null>(null);
 
   const virtualizer = useVirtualizer({
     count: logs.length,
@@ -63,19 +67,30 @@ export function VirtualizedProcessLogs({
       if (scrollFrameRef.current !== null) {
         cancelAnimationFrame(scrollFrameRef.current);
       }
+      if (autoScrollReleaseTimerRef.current !== null) {
+        clearTimeout(autoScrollReleaseTimerRef.current);
+      }
+      isAutoScrollingRef.current = true;
 
       scrollFrameRef.current = requestAnimationFrame(() => {
         scrollFrameRef.current = null;
         virtualizer.scrollToIndex(index, options);
+        autoScrollReleaseTimerRef.current = setTimeout(() => {
+          isAutoScrollingRef.current = false;
+          updateBottomState();
+        }, 150);
       });
     },
-    [virtualizer]
+    [updateBottomState, virtualizer]
   );
 
   useEffect(() => {
     return () => {
       if (scrollFrameRef.current !== null) {
         cancelAnimationFrame(scrollFrameRef.current);
+      }
+      if (autoScrollReleaseTimerRef.current !== null) {
+        clearTimeout(autoScrollReleaseTimerRef.current);
       }
     };
   }, []);
@@ -116,8 +131,19 @@ export function VirtualizedProcessLogs({
   }, [currentMatchIndex, matchIndices, scheduleScrollToIndex]);
 
   const handleScroll = useCallback(() => {
+    if (isAutoScrollingRef.current) {
+      return;
+    }
     updateBottomState();
   }, [updateBottomState]);
+
+  const handleUserScrollIntent = useCallback(() => {
+    isAutoScrollingRef.current = false;
+    if (autoScrollReleaseTimerRef.current !== null) {
+      clearTimeout(autoScrollReleaseTimerRef.current);
+      autoScrollReleaseTimerRef.current = null;
+    }
+  }, []);
 
   if (logs.length === 0 && !error) {
     return (
@@ -147,6 +173,8 @@ export function VirtualizedProcessLogs({
       ref={scrollRef}
       className="h-full overflow-auto"
       onScroll={handleScroll}
+      onWheel={handleUserScrollIntent}
+      onTouchMove={handleUserScrollIntent}
     >
       <div
         className="relative w-full"

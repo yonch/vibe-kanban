@@ -34,7 +34,7 @@ export function VirtualizedProcessLogs({
   const isAtBottomRef = useRef(true);
   const prevLogsRef = useRef<LogEntry[] | null>(null);
   const prevLogsLengthRef = useRef(0);
-  const prevCurrentMatchRef = useRef<number | undefined>(undefined);
+  const prevMatchTargetRef = useRef<string | null>(null);
   const scrollFrameRef = useRef<number | null>(null);
   const isAutoScrollingRef = useRef(false);
   const autoScrollReleaseTimerRef = useRef<ReturnType<
@@ -129,19 +129,28 @@ export function VirtualizedProcessLogs({
 
   // Scroll to current match when it changes
   useLayoutEffect(() => {
-    if (
-      matchIndices.length > 0 &&
-      currentMatchIndex >= 0 &&
-      currentMatchIndex !== prevCurrentMatchRef.current
-    ) {
-      const logIndex = matchIndices[currentMatchIndex];
-      scheduleScrollToIndex(logIndex, {
-        align: 'center',
-        behavior: 'smooth',
-      });
-      prevCurrentMatchRef.current = currentMatchIndex;
+    if (matchIndices.length === 0 || currentMatchIndex < 0) {
+      prevMatchTargetRef.current = null;
+      return;
     }
-  }, [currentMatchIndex, matchIndices, scheduleScrollToIndex]);
+
+    const logIndex = matchIndices[currentMatchIndex];
+    if (logIndex === undefined) {
+      prevMatchTargetRef.current = null;
+      return;
+    }
+
+    const target = `${searchQuery}:${logIndex}`;
+    if (target === prevMatchTargetRef.current) {
+      return;
+    }
+
+    scheduleScrollToIndex(logIndex, {
+      align: 'center',
+      behavior: 'smooth',
+    });
+    prevMatchTargetRef.current = target;
+  }, [currentMatchIndex, matchIndices, scheduleScrollToIndex, searchQuery]);
 
   const handleScroll = useCallback(() => {
     if (isAutoScrollingRef.current) {

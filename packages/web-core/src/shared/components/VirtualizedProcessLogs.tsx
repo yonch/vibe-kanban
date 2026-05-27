@@ -113,16 +113,19 @@ export function VirtualizedProcessLogs({
       previousLogs !== null &&
       previousLogs !== logs &&
       logs.length <= previousLength;
+    const hasActiveSearchMatch =
+      matchIndices.length > 0 && currentMatchIndex >= 0;
     if (
-      isInitialLoad ||
-      ((appendedLogs || replacedLogs) && isAtBottomRef.current)
+      !hasActiveSearchMatch &&
+      (isInitialLoad ||
+        ((appendedLogs || replacedLogs) && isAtBottomRef.current))
     ) {
       scheduleScrollToIndex(logs.length - 1, {
         align: 'end',
         behavior: 'auto',
       });
     }
-  }, [logs, scheduleScrollToIndex]);
+  }, [currentMatchIndex, logs, matchIndices.length, scheduleScrollToIndex]);
 
   // Scroll to current match when it changes
   useLayoutEffect(() => {

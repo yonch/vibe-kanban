@@ -380,6 +380,7 @@ const ScriptFixerDialogImpl = create<ScriptFixerDialogProps>(
               <div className="bg-secondary py-base flex-1 border rounded-md bg-muted overflow-hidden min-w-0">
                 {latestProcess ? (
                   <VirtualizedProcessLogs
+                    key={latestProcess.id}
                     logs={logs}
                     error={logsError}
                     searchQuery=""

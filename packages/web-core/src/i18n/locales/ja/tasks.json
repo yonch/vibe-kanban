@@ -85,7 +85,9 @@
       "gitCliNotLoggedIn": "Gitが認証されていません。\"gh auth login\" を実行するかGitの認証情報を設定してから再試行してください。",
       "gitCliNotInstalled": "Git CLIがインストールされていません。PRを作成するにはGitをインストールしてください。",
       "targetBranchNotFound": "ターゲットブランチ '{{branch}}' がリモートに存在しません。プルリクエストを作成する前にブランチが存在することを確認してください。"
-    }
+    },
+    "squashMergeLabel": "PRをスカッシュマージする",
+    "squashMergeDraftHint": "下書きのPRはマージできません"
   },
   "branches": {
     "changeTarget": {
@@ -130,7 +132,9 @@
       "mergeChanges": "変更のマージに失敗しました",
       "pushChanges": "変更のプッシュに失敗しました",
       "rebaseBranch": "ブランチのリベースに失敗しました",
-      "branchStatusUnavailable": "ブランチのステータスを取得できません。ターゲットブランチの変更は引き続き可能です。"
+      "branchStatusUnavailable": "ブランチのステータスを取得できません。ターゲットブランチの変更は引き続き可能です。",
+      "createPr": "PRの作成に失敗しました",
+      "squashMerge": "PRのスカッシュマージに失敗しました"
     },
     "labels": {
       "taskBranch": "タスクブランチ"
@@ -138,7 +142,8 @@
     "pr": {
       "number": "PR #{{number}}",
       "open": "Open PR #{{number}}",
-      "merged": "マージ済みPR #{{prNumber}}"
+      "merged": "マージ済みPR #{{prNumber}}",
+      "squashMerge": "スカッシュマージ"
     },
     "actions": {
       "title": "Gitアクション",
@@ -193,7 +198,11 @@
       "forcePush": "強制プッシュ",
       "forcePushing": "強制プッシュ中...",
       "rebase": "リベース",
-      "rebasing": "リベース中..."
+      "rebasing": "リベース中...",
+      "prAndSquashMerge": "PR & スカッシュマージ",
+      "squashMerge": "スカッシュマージ",
+      "squashMerged": "スカッシュマージ完了！",
+      "squashMerging": "スカッシュマージ中..."
     },
     "status": {
       "ahead": "先行",

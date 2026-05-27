@@ -85,7 +85,9 @@
       "gitCliNotLoggedIn": "Git no está autenticado. Ejecuta \"gh auth login\" (o configura las credenciales de Git) e inténtalo de nuevo.",
       "gitCliNotInstalled": "Git CLI no está instalado. Instala Git para crear una PR.",
       "targetBranchNotFound": "La rama objetivo '{{branch}}' no existe en el remoto. Por favor, asegúrese de que la rama exista antes de crear una solicitud de extracción."
-    }
+    },
+    "squashMergeLabel": "También fusionar (squash) el PR",
+    "squashMergeDraftHint": "no se pueden fusionar PRs en borrador"
   },
   "branches": {
     "changeTarget": {
@@ -130,7 +132,9 @@
       "mergeChanges": "Error al fusionar cambios",
       "pushChanges": "Error al enviar cambios",
       "rebaseBranch": "Error al hacer rebase de la rama",
-      "branchStatusUnavailable": "No se puede obtener el estado de la rama. Aún puedes cambiar la rama de destino."
+      "branchStatusUnavailable": "No se puede obtener el estado de la rama. Aún puedes cambiar la rama de destino.",
+      "createPr": "Error al crear PR",
+      "squashMerge": "Error al fusionar (squash) el PR"
     },
     "labels": {
       "taskBranch": "Rama de tarea"
@@ -138,7 +142,8 @@
     "pr": {
       "number": "PR #{{number}}",
       "open": "Open PR #{{number}}",
-      "merged": "PR #{{prNumber}} fusionado"
+      "merged": "PR #{{prNumber}} fusionado",
+      "squashMerge": "Squash-merge"
     },
     "createRepo": {
       "dialog": {
@@ -193,7 +198,11 @@
       "pushing": "Enviando...",
       "pushFailed": "Falló",
       "rebase": "Rebase",
-      "rebasing": "Rebaseando..."
+      "rebasing": "Rebaseando...",
+      "prAndSquashMerge": "PR y squash-merge",
+      "squashMerge": "Squash-merge",
+      "squashMerged": "¡Fusionado (squash)!",
+      "squashMerging": "Fusionando (squash)..."
     },
     "status": {
       "ahead": "adelante",

@@ -218,12 +218,28 @@ jobs:
       - name: Sqlx checks
         run: npm run prepare-db:check
 
+  check-deploy-key:
+    runs-on: *runner_label
+    outputs:
+      present: ${{ steps.check.outputs.present }}
+    steps:
+      - id: check
+        env:
+          KEY: ${{ secrets.VK_PRIVATE_DEPLOY_KEY }}
+        run: |
+          if [ -n "$KEY" ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+          fi
+
   backend-remote-checks:
-    needs: changes
+    needs: [changes, check-deploy-key]
     if: >-
       always()
       && (needs.changes.outputs['backend-remote'] == 'true' || needs.changes.result == 'skipped')
       && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository)
+      && needs.check-deploy-key.outputs.present == 'true'
     runs-on: *runner_label
     env:
       SCCACHE_GHA_ENABLED: "true"

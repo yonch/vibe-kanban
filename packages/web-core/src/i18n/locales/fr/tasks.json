@@ -236,19 +236,26 @@
       "forcePush": "Push forcé",
       "forcePushing": "Push forcé en cours...",
       "creating": "Création en cours...",
-      "createPr": "Créer une PR"
+      "createPr": "Créer une PR",
+      "prAndSquashMerge": "PR & squash-merge",
+      "squashMerge": "Squash-merge",
+      "squashMerged": "Squash-mergé !",
+      "squashMerging": "Squash-merge en cours..."
     },
     "errors": {
       "changeTargetBranch": "Échec du changement de branche cible",
       "pushChanges": "Échec du push des modifications",
       "mergeChanges": "Échec de la fusion des modifications",
       "rebaseBranch": "Échec du rebasage de la branche",
-      "branchStatusUnavailable": "Impossible de récupérer le statut de la branche. Vous pouvez toujours changer la branche cible."
+      "branchStatusUnavailable": "Impossible de récupérer le statut de la branche. Vous pouvez toujours changer la branche cible.",
+      "createPr": "Échec de la création de la PR",
+      "squashMerge": "Échec du squash-merge de la PR"
     },
     "pr": {
       "open": "Ouvrir la PR #{{number}}",
       "number": "PR #{{number}}",
-      "merged": "PR #{{prNumber}} fusionnée"
+      "merged": "PR #{{prNumber}} fusionnée",
+      "squashMerge": "Squash-merge"
     },
     "actions": {
       "title": "Actions Git",
@@ -366,7 +373,9 @@
       "gitCliNotLoggedIn": "Git n'est pas authentifié. Exécutez \"gh auth login\" (ou configurez les identifiants Git) et réessayez.",
       "gitCliNotInstalled": "Git CLI n'est pas installé. Installez Git pour créer une PR.",
       "targetBranchNotFound": "La branche cible '{{branch}}' n'existe pas sur le dépôt distant. Veuillez vous assurer que la branche existe avant de créer une pull request."
-    }
+    },
+    "squashMergeLabel": "Également squash-merge la PR",
+    "squashMergeDraftHint": "impossible de fusionner les PR en brouillon"
   },
   "prComments": {
     "dialog": {

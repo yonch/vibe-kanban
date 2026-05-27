@@ -157,19 +157,26 @@
       "forcePush": "強制推送",
       "forcePushing": "強制推送中...",
       "creating": "建立中...",
-      "createPr": "建立 PR"
+      "createPr": "建立 PR",
+      "prAndSquashMerge": "PR 與壓縮合併",
+      "squashMerge": "壓縮合併",
+      "squashMerged": "已壓縮合併！",
+      "squashMerging": "壓縮合併中..."
     },
     "errors": {
       "changeTargetBranch": "變更目標分支失敗",
       "pushChanges": "推送變更失敗",
       "mergeChanges": "合併變更失敗",
       "rebaseBranch": "重基底分支失敗",
-      "branchStatusUnavailable": "無法取得分支狀態。您仍然可以變更目標分支。"
+      "branchStatusUnavailable": "無法取得分支狀態。您仍然可以變更目標分支。",
+      "createPr": "建立 PR 失敗",
+      "squashMerge": "壓縮合併 PR 失敗"
     },
     "pr": {
       "open": "開啟 PR #{{number}}",
       "number": "PR #{{number}}",
-      "merged": "已合併PR #{{prNumber}}"
+      "merged": "已合併PR #{{prNumber}}",
+      "squashMerge": "壓縮合併"
     },
     "actions": {
       "title": "Git 操作",
@@ -284,7 +291,9 @@
       "gitCliNotLoggedIn": "Git 尚未驗證。請執行 gh auth login（或設定 Git 憑證）後重試。",
       "gitCliNotInstalled": "未安裝 Git CLI。請安裝 Git 以建立 PR。",
       "targetBranchNotFound": "遠端不存在目標分支 {{branch}}。建立 PR 前請確認該分支存在。"
-    }
+    },
+    "squashMergeLabel": "同時壓縮合併（squash-merge）此 PR",
+    "squashMergeDraftHint": "草稿 PR 無法合併"
   },
   "prComments": {
     "dialog": {

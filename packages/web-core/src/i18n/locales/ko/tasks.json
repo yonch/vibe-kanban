@@ -85,7 +85,9 @@
       "gitCliNotLoggedIn": "Git이 인증되지 않았습니다. \"gh auth login\"을 실행하거나 Git 자격 증명을 설정한 후 다시 시도하세요.",
       "gitCliNotInstalled": "Git CLI가 설치되어 있지 않습니다. PR을 생성하려면 Git을 설치하세요.",
       "targetBranchNotFound": "대상 브랜치 '{{branch}}'이(가) 원격에 존재하지 않습니다. 풀 리퀘스트를 생성하기 전에 브랜치가 존재하는지 확인하세요."
-    }
+    },
+    "squashMergeLabel": "PR을 스쿼시 머지로 함께 병합",
+    "squashMergeDraftHint": "초안 PR은 병합할 수 없습니다"
   },
   "branches": {
     "changeTarget": {
@@ -149,19 +151,26 @@
       "forcePush": "강제 푸시",
       "forcePushing": "강제 푸시 중...",
       "creating": "생성 중...",
-      "createPr": "PR 생성"
+      "createPr": "PR 생성",
+      "prAndSquashMerge": "PR 및 스쿼시 머지",
+      "squashMerge": "스쿼시 머지",
+      "squashMerged": "스쿼시 머지됨!",
+      "squashMerging": "스쿼시 머지 중..."
     },
     "errors": {
       "changeTargetBranch": "대상 브랜치를 변경하지 못했습니다",
       "pushChanges": "변경사항을 푸시하지 못했습니다",
       "mergeChanges": "변경사항을 병합하지 못했습니다",
       "rebaseBranch": "브랜치를 리베이스하지 못했습니다",
-      "branchStatusUnavailable": "브랜치 상태를 가져올 수 없습니다. 대상 브랜치는 여전히 변경할 수 있습니다."
+      "branchStatusUnavailable": "브랜치 상태를 가져올 수 없습니다. 대상 브랜치는 여전히 변경할 수 있습니다.",
+      "createPr": "PR 생성 실패",
+      "squashMerge": "PR 스쿼시 머지 실패"
     },
     "pr": {
       "open": "Open PR #{{number}}",
       "number": "PR #{{number}}",
-      "merged": "병합된 PR #{{prNumber}}"
+      "merged": "병합된 PR #{{prNumber}}",
+      "squashMerge": "스쿼시 머지"
     },
     "actions": {
       "title": "Git 작업",

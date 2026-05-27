@@ -22,6 +22,7 @@ const ESTIMATED_LOG_ROW_HEIGHT = 28;
 const LOG_OVERSCAN = 12;
 const NEAR_BOTTOM_THRESHOLD_PX = 24;
 const MATCH_SCROLL_PAUSE_MS = 500;
+const USER_SCROLL_UP_THRESHOLD_PX = 5;
 
 export function VirtualizedProcessLogs({
   logs,
@@ -202,7 +203,8 @@ export function VirtualizedProcessLogs({
   const handleScroll = useCallback(() => {
     const el = scrollRef.current;
     const scrollTop = el?.scrollTop ?? 0;
-    const isScrollingUp = scrollTop < lastScrollTopRef.current;
+    const isScrollingUp =
+      lastScrollTopRef.current - scrollTop > USER_SCROLL_UP_THRESHOLD_PX;
     lastScrollTopRef.current = scrollTop;
 
     if (isAutoScrollingRef.current && !isScrollingUp) {

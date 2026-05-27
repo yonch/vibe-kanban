@@ -32,6 +32,7 @@ export function VirtualizedProcessLogs({
   const { t } = useTranslation('tasks');
   const scrollRef = useRef<HTMLDivElement | null>(null);
   const isAtBottomRef = useRef(true);
+  const prevLogsRef = useRef<LogEntry[] | null>(null);
   const prevLogsLengthRef = useRef(0);
   const prevCurrentMatchRef = useRef<number | undefined>(undefined);
   const scrollFrameRef = useRef<number | null>(null);
@@ -96,7 +97,9 @@ export function VirtualizedProcessLogs({
   }, []);
 
   useLayoutEffect(() => {
+    const previousLogs = prevLogsRef.current;
     const previousLength = prevLogsLengthRef.current;
+    prevLogsRef.current = logs;
     prevLogsLengthRef.current = logs.length;
 
     if (logs.length === 0) {
@@ -106,13 +109,20 @@ export function VirtualizedProcessLogs({
 
     const isInitialLoad = previousLength === 0;
     const appendedLogs = logs.length > previousLength;
-    if (isInitialLoad || (appendedLogs && isAtBottomRef.current)) {
+    const replacedLogs =
+      previousLogs !== null &&
+      previousLogs !== logs &&
+      logs.length <= previousLength;
+    if (
+      isInitialLoad ||
+      ((appendedLogs || replacedLogs) && isAtBottomRef.current)
+    ) {
       scheduleScrollToIndex(logs.length - 1, {
         align: 'end',
         behavior: 'auto',
       });
     }
-  }, [logs.length, scheduleScrollToIndex]);
+  }, [logs, scheduleScrollToIndex]);
 
   // Scroll to current match when it changes
   useLayoutEffect(() => {

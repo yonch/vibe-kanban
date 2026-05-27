@@ -132,9 +132,7 @@
       "mergeChanges": "Error al fusionar cambios",
       "pushChanges": "Error al enviar cambios",
       "rebaseBranch": "Error al hacer rebase de la rama",
-      "branchStatusUnavailable": "No se puede obtener el estado de la rama. Aún puedes cambiar la rama de destino.",
-      "createPr": "Error al crear PR",
-      "squashMerge": "Error al fusionar (squash) el PR"
+      "branchStatusUnavailable": "No se puede obtener el estado de la rama. Aún puedes cambiar la rama de destino."
     },
     "labels": {
       "taskBranch": "Rama de tarea"
@@ -142,8 +140,7 @@
     "pr": {
       "number": "PR #{{number}}",
       "open": "Open PR #{{number}}",
-      "merged": "PR #{{prNumber}} fusionado",
-      "squashMerge": "Squash-merge"
+      "merged": "PR #{{prNumber}} fusionado"
     },
     "createRepo": {
       "dialog": {
@@ -198,11 +195,7 @@
       "pushing": "Enviando...",
       "pushFailed": "Falló",
       "rebase": "Rebase",
-      "rebasing": "Rebaseando...",
-      "prAndSquashMerge": "PR y squash-merge",
-      "squashMerge": "Squash-merge",
-      "squashMerged": "¡Fusionado (squash)!",
-      "squashMerging": "Fusionando (squash)..."
+      "rebasing": "Rebaseando..."
     },
     "status": {
       "ahead": "adelante",

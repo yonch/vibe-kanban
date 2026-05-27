@@ -236,26 +236,19 @@
       "forcePush": "Push forcé",
       "forcePushing": "Push forcé en cours...",
       "creating": "Création en cours...",
-      "createPr": "Créer une PR",
-      "prAndSquashMerge": "PR & squash-merge",
-      "squashMerge": "Squash-merge",
-      "squashMerged": "Squash-mergé !",
-      "squashMerging": "Squash-merge en cours..."
+      "createPr": "Créer une PR"
     },
     "errors": {
       "changeTargetBranch": "Échec du changement de branche cible",
       "pushChanges": "Échec du push des modifications",
       "mergeChanges": "Échec de la fusion des modifications",
       "rebaseBranch": "Échec du rebasage de la branche",
-      "branchStatusUnavailable": "Impossible de récupérer le statut de la branche. Vous pouvez toujours changer la branche cible.",
-      "createPr": "Échec de la création de la PR",
-      "squashMerge": "Échec du squash-merge de la PR"
+      "branchStatusUnavailable": "Impossible de récupérer le statut de la branche. Vous pouvez toujours changer la branche cible."
     },
     "pr": {
       "open": "Ouvrir la PR #{{number}}",
       "number": "PR #{{number}}",
-      "merged": "PR #{{prNumber}} fusionnée",
-      "squashMerge": "Squash-merge"
+      "merged": "PR #{{prNumber}} fusionnée"
     },
     "actions": {
       "title": "Actions Git",

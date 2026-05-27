@@ -157,26 +157,19 @@
       "forcePush": "強制推送",
       "forcePushing": "強制推送中...",
       "creating": "建立中...",
-      "createPr": "建立 PR",
-      "prAndSquashMerge": "PR 與壓縮合併",
-      "squashMerge": "壓縮合併",
-      "squashMerged": "已壓縮合併！",
-      "squashMerging": "壓縮合併中..."
+      "createPr": "建立 PR"
     },
     "errors": {
       "changeTargetBranch": "變更目標分支失敗",
       "pushChanges": "推送變更失敗",
       "mergeChanges": "合併變更失敗",
       "rebaseBranch": "重基底分支失敗",
-      "branchStatusUnavailable": "無法取得分支狀態。您仍然可以變更目標分支。",
-      "createPr": "建立 PR 失敗",
-      "squashMerge": "壓縮合併 PR 失敗"
+      "branchStatusUnavailable": "無法取得分支狀態。您仍然可以變更目標分支。"
     },
     "pr": {
       "open": "開啟 PR #{{number}}",
       "number": "PR #{{number}}",
-      "merged": "已合併PR #{{prNumber}}",
-      "squashMerge": "壓縮合併"
+      "merged": "已合併PR #{{prNumber}}"
     },
     "actions": {
       "title": "Git 操作",

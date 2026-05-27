@@ -157,26 +157,19 @@
       "forcePush": "强制推送",
       "forcePushing": "强制推送中...",
       "creating": "创建中...",
-      "createPr": "创建 PR",
-      "prAndSquashMerge": "PR 与压缩合并",
-      "squashMerge": "压缩合并",
-      "squashMerged": "已压缩合并！",
-      "squashMerging": "压缩合并中..."
+      "createPr": "创建 PR"
     },
     "errors": {
       "changeTargetBranch": "更改目标分支失败",
       "pushChanges": "推送更改失败",
       "mergeChanges": "合并更改失败",
       "rebaseBranch": "变基分支失败",
-      "branchStatusUnavailable": "无法获取分支状态。您仍然可以更改目标分支。",
-      "createPr": "创建 PR 失败",
-      "squashMerge": "压缩合并 PR 失败"
+      "branchStatusUnavailable": "无法获取分支状态。您仍然可以更改目标分支。"
     },
     "pr": {
       "open": "打开 PR #{{number}}",
       "number": "PR #{{number}}",
-      "merged": "已合并PR #{{prNumber}}",
-      "squashMerge": "压缩合并"
+      "merged": "已合并PR #{{prNumber}}"
     },
     "actions": {
       "title": "Git 操作",

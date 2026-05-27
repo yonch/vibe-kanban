@@ -35,6 +35,7 @@ export function VirtualizedProcessLogs({
   const prevLogsRef = useRef<LogEntry[] | null>(null);
   const prevLogsLengthRef = useRef(0);
   const prevMatchTargetRef = useRef<string | null>(null);
+  const lastScrollTopRef = useRef(0);
   const scrollFrameRef = useRef<number | null>(null);
   const isAutoScrollingRef = useRef(false);
   const autoScrollReleaseTimerRef = useRef<ReturnType<
@@ -176,8 +177,20 @@ export function VirtualizedProcessLogs({
   }, [currentMatchIndex, matchIndices, scheduleScrollToIndex, searchQuery]);
 
   const handleScroll = useCallback(() => {
-    if (isAutoScrollingRef.current) {
+    const el = scrollRef.current;
+    const scrollTop = el?.scrollTop ?? 0;
+    const isScrollingUp = scrollTop < lastScrollTopRef.current;
+    lastScrollTopRef.current = scrollTop;
+
+    if (isAutoScrollingRef.current && !isScrollingUp) {
       return;
+    }
+    if (isAutoScrollingRef.current) {
+      isAutoScrollingRef.current = false;
+      if (autoScrollReleaseTimerRef.current !== null) {
+        clearTimeout(autoScrollReleaseTimerRef.current);
+        autoScrollReleaseTimerRef.current = null;
+      }
     }
     updateBottomState();
   }, [updateBottomState]);

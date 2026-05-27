@@ -49,6 +49,8 @@ export function VirtualizedProcessLogs({
     getItemKey: (index) => `log-${index}`,
   });
 
+  const totalSize = virtualizer.getTotalSize();
+
   const updateBottomState = useCallback(() => {
     const el = scrollRef.current;
     if (!el) {
@@ -127,6 +129,27 @@ export function VirtualizedProcessLogs({
     }
   }, [currentMatchIndex, logs, matchIndices.length, scheduleScrollToIndex]);
 
+  useLayoutEffect(() => {
+    const hasActiveSearchMatch =
+      matchIndices.length > 0 && currentMatchIndex >= 0;
+    if (
+      logs.length > 0 &&
+      !hasActiveSearchMatch &&
+      (isAtBottomRef.current || isAutoScrollingRef.current)
+    ) {
+      scheduleScrollToIndex(logs.length - 1, {
+        align: 'end',
+        behavior: 'auto',
+      });
+    }
+  }, [
+    currentMatchIndex,
+    logs.length,
+    matchIndices.length,
+    scheduleScrollToIndex,
+    totalSize,
+  ]);
+
   // Scroll to current match when it changes
   useLayoutEffect(() => {
     if (matchIndices.length === 0 || currentMatchIndex < 0) {
@@ -198,10 +221,7 @@ export function VirtualizedProcessLogs({
       onWheel={handleUserScrollIntent}
       onTouchMove={handleUserScrollIntent}
     >
-      <div
-        className="relative w-full"
-        style={{ height: `${virtualizer.getTotalSize()}px` }}
-      >
+      <div className="relative w-full" style={{ height: `${totalSize}px` }}>
         {virtualItems.map((virtualItem) => {
           const log = logs[virtualItem.index];
           if (!log) {

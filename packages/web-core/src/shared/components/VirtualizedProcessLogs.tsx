@@ -147,26 +147,20 @@ export function VirtualizedProcessLogs({
       previousLogs !== null &&
       previousLogs !== logs &&
       logs.length <= previousLength;
-    const hasActiveSearchMatch =
-      matchIndices.length > 0 && currentMatchIndex >= 0;
     if (
-      !hasActiveSearchMatch &&
-      (isInitialLoad ||
-        ((appendedLogs || replacedLogs) && isAtBottomRef.current))
+      isInitialLoad ||
+      ((appendedLogs || replacedLogs) && isAtBottomRef.current)
     ) {
       scheduleScrollToIndex(logs.length - 1, {
         align: 'end',
         behavior: 'auto',
       });
     }
-  }, [currentMatchIndex, logs, matchIndices.length, scheduleScrollToIndex]);
+  }, [logs, scheduleScrollToIndex]);
 
   useLayoutEffect(() => {
-    const hasActiveSearchMatch =
-      matchIndices.length > 0 && currentMatchIndex >= 0;
     if (
       logs.length > 0 &&
-      !hasActiveSearchMatch &&
       (isAtBottomRef.current || isAutoScrollingRef.current)
     ) {
       scheduleScrollToIndex(logs.length - 1, {
@@ -174,13 +168,7 @@ export function VirtualizedProcessLogs({
         behavior: 'auto',
       });
     }
-  }, [
-    currentMatchIndex,
-    logs.length,
-    matchIndices.length,
-    scheduleScrollToIndex,
-    totalSize,
-  ]);
+  }, [logs.length, scheduleScrollToIndex, totalSize]);
 
   // Scroll to current match when it changes
   useLayoutEffect(() => {

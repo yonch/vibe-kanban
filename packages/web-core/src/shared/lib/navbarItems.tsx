@@ -87,6 +87,30 @@ function buildSpecialContent(
   );
 }
 
+/**
+ * Per-icon classes for actions whose navbar glyph needs a state cue. Ports the
+ * dev-server spin/color logic from the removed ContextBar (D-001): the glyph is
+ * swapped to a spinner during transitions and must animate, and turns red while
+ * the server is running.
+ */
+function getNavbarIconClassName(
+  action: ActionDefinition,
+  ctx: ActionVisibilityContext
+): string | undefined {
+  if (action.id === 'toggle-dev-server') {
+    if (
+      ctx.devServerState === 'starting' ||
+      ctx.devServerState === 'stopping'
+    ) {
+      return 'animate-spin';
+    }
+    if (ctx.devServerState === 'running') {
+      return 'text-error hover:text-error';
+    }
+  }
+  return undefined;
+}
+
 export function toNavbarSectionItems(
   items: readonly ActionNavbarItem[],
   ctx: ActionVisibilityContext,
@@ -121,6 +145,7 @@ export function toNavbarSectionItems(
       type: 'action',
       id: item.id,
       icon,
+      iconClassName: getNavbarIconClassName(item, ctx),
       isActive: isActionActive(item, ctx),
       tooltip,
       shortcut: item.shortcut,

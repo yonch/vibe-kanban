@@ -29,6 +29,9 @@ export interface NavbarActionItem {
   type?: 'action';
   id: string;
   icon?: Icon;
+  // Extra classes applied to the icon glyph, for action-specific state cues
+  // (e.g. ToggleDevServer's animate-spin during transitions, red when running).
+  iconClassName?: string;
   isActive?: boolean;
   tooltip?: string;
   shortcut?: string;
@@ -56,6 +59,7 @@ function isDivider(item: NavbarSectionItem): item is NavbarDividerItem {
 interface NavbarIconButtonProps
   extends ButtonHTMLAttributes<HTMLButtonElement> {
   icon: Icon;
+  iconClassName?: string;
   isActive?: boolean;
   tooltip?: string;
   shortcut?: string;
@@ -63,6 +67,7 @@ interface NavbarIconButtonProps
 
 function NavbarIconButton({
   icon: IconComponent,
+  iconClassName,
   isActive = false,
   tooltip,
   shortcut,
@@ -81,7 +86,7 @@ function NavbarIconButton({
       {...props}
     >
       <IconComponent
-        className="size-icon-base"
+        className={cn('size-icon-base', iconClassName)}
         weight={isActive ? 'fill' : 'regular'}
       />
     </button>
@@ -240,6 +245,7 @@ export function Navbar({
       <NavbarIconButton
         key={key}
         icon={item.icon}
+        iconClassName={item.iconClassName}
         isActive={item.isActive}
         onClick={item.onClick}
         aria-label={item.tooltip}
@@ -368,6 +374,7 @@ export function Navbar({
                     <NavbarIconButton
                       key={item.id}
                       icon={item.icon}
+                      iconClassName={item.iconClassName}
                       isActive={item.isActive}
                       onClick={item.onClick}
                       aria-label={item.tooltip}

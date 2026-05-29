@@ -366,6 +366,11 @@ export function Navbar({
           {/* Right side: sync indicator + action buttons + user slot */}
           <div className="flex items-center gap-1 shrink-0">
             <SyncErrorIndicator errors={syncErrors} />
+            {/*
+              Mobile renders plain-icon actions only; customContent actions
+              (e.g. Open in IDE, Copy Path) are workspace-scoped and
+              intentionally not shown on mobile.
+            */}
             {isOnProjectPage &&
               rightItems
                 .filter((item): item is NavbarActionItem => !isDivider(item))

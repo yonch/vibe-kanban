@@ -62,6 +62,7 @@ function buildSpecialContent(
   iconType: SpecialIconType,
   ctx: ActionVisibilityContext,
   enabled: boolean,
+  tooltip: string,
   execute: () => void
 ): ReactNode {
   if (iconType === 'ide-icon') {
@@ -69,6 +70,7 @@ function buildSpecialContent(
       <button
         type="button"
         className="flex items-center justify-center rounded-sm text-low hover:text-normal disabled:opacity-40 disabled:cursor-not-allowed"
+        aria-label={tooltip}
         onClick={execute}
         disabled={!enabled}
       >
@@ -134,7 +136,7 @@ export function toNavbarSectionItems(
         tooltip: icon === 'copy-icon' ? undefined : tooltip,
         shortcut: item.shortcut,
         disabled: !enabled,
-        customContent: buildSpecialContent(icon, ctx, enabled, () =>
+        customContent: buildSpecialContent(icon, ctx, enabled, tooltip, () =>
           onExecuteAction(item)
         ),
       });

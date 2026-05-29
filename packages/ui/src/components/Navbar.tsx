@@ -367,9 +367,9 @@ export function Navbar({
           <div className="flex items-center gap-1 shrink-0">
             <SyncErrorIndicator errors={syncErrors} />
             {/*
-              Mobile renders plain-icon actions only; customContent actions
-              (e.g. Open in IDE, Copy Path) are workspace-scoped and
-              intentionally not shown on mobile.
+              This map renders plain-icon actions only. customContent actions
+              (Open in IDE, Copy Path) carry no plain icon and are
+              intentionally omitted on mobile.
             */}
             {isOnProjectPage &&
               rightItems

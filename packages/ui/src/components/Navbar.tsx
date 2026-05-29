@@ -224,7 +224,7 @@ export function Navbar({
           {item.customContent}
         </Tooltip>
       ) : (
-        <div key={key} className="flex items-center">
+        <div key={key} className="group flex items-center">
           {item.customContent}
         </div>
       );

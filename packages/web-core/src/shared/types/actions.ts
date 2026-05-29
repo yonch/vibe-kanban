@@ -30,7 +30,7 @@ export type LogsPanelContent =
     }
   | { type: 'terminal' };
 
-// Special icon types for ContextBar
+// Icon types rendered with custom content rather than a plain Phosphor icon.
 export type SpecialIconType = 'ide-icon' | 'copy-icon';
 export type ActionIcon = Icon | SpecialIconType;
 
@@ -219,8 +219,6 @@ export type ActionDefinition =
 // Divider markers
 export const NavbarDivider = { type: 'divider' } as const;
 export type NavbarItem = ActionDefinition | typeof NavbarDivider;
-export const ContextBarDivider = { type: 'divider' } as const;
-export type ContextBarItem = ActionDefinition | typeof ContextBarDivider;
 
 // Helper to resolve dynamic label
 export function resolveLabel(

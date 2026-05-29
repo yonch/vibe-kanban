@@ -15,7 +15,6 @@ import {
   type ConversationListHandle,
 } from '@/features/workspace-chat/ui/ConversationListContainer';
 import { SessionChatBoxContainer } from '@/features/workspace-chat/ui/SessionChatBoxContainer';
-import { ContextBarContainer } from './ContextBarContainer';
 import { EntriesProvider } from '@/features/workspace-chat/model/contexts/EntriesContext';
 import { MessageEditProvider } from '@/features/workspace-chat/model/contexts/MessageEditContext';
 import { RetryUiProvider } from '@/features/workspace-chat/model/contexts/RetryUiContext';
@@ -235,10 +234,6 @@ export const WorkspacesMainContainer = forwardRef<
     />
   );
 
-  const contextBarContent = workspaceWithSession ? (
-    <ContextBarContainer containerRef={containerRef} />
-  ) : null;
-
   useImperativeHandle(
     ref,
     () => ({
@@ -261,7 +256,6 @@ export const WorkspacesMainContainer = forwardRef<
             containerRef={containerRef}
             conversationContent={conversationContent}
             chatBoxContent={chatBoxContent}
-            contextBarContent={contextBarContent}
             isAtBottom={isAtBottom}
             onAtBottomChange={handleAtBottomChange}
             onScrollToBottom={handleScrollToBottom}

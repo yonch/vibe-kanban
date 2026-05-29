@@ -39,14 +39,6 @@ const loadMobileFontScale = (): MobileFontScale => {
 
 export type KanbanViewMode = 'kanban' | 'list';
 
-export type ContextBarPosition =
-  | 'top-left'
-  | 'top-right'
-  | 'middle-left'
-  | 'middle-right'
-  | 'bottom-left'
-  | 'bottom-right';
-
 // Workspace-specific panel state
 export type WorkspacePanelState = {
   rightMainPanelMode: RightMainPanelMode | null;
@@ -310,7 +302,6 @@ type State = {
   // UI preferences
   repoActions: Record<string, RepoAction>;
   expanded: Record<string, boolean>;
-  contextBarPosition: ContextBarPosition;
   paneSizes: Record<string, number | string>;
   collapsedPaths: Record<string, string[]>;
   fileSearchRepoId: string | null;
@@ -360,7 +351,6 @@ type State = {
   setExpanded: (key: string, value: boolean) => void;
   toggleExpanded: (key: string, defaultValue?: boolean) => void;
   setExpandedAll: (keys: string[], value: boolean) => void;
-  setContextBarPosition: (position: ContextBarPosition) => void;
   setPaneSize: (key: string, size: number | string) => void;
   setCollapsedPaths: (key: string, paths: string[]) => void;
   setFileSearchRepo: (repoId: string | null) => void;
@@ -449,7 +439,6 @@ export const useUiPreferencesStore = create<State>()((set, get) => ({
   // UI preferences state
   repoActions: {},
   expanded: {},
-  contextBarPosition: 'middle-right',
   paneSizes: {},
   collapsedPaths: {},
   fileSearchRepoId: null,
@@ -506,7 +495,6 @@ export const useUiPreferencesStore = create<State>()((set, get) => ({
         ...Object.fromEntries(keys.map((k) => [k, value])),
       },
     })),
-  setContextBarPosition: (position) => set({ contextBarPosition: position }),
   setPaneSize: (key, size) =>
     set((s) => ({ paneSizes: { ...s.paneSizes, [key]: size } })),
   setCollapsedPaths: (key, paths) =>
@@ -873,16 +861,6 @@ export function usePersistedExpanded(
   };
 
   return [expanded, set];
-}
-
-// Hook for context bar position
-export function useContextBarPosition(): [
-  ContextBarPosition,
-  (position: ContextBarPosition) => void,
-] {
-  const position = useUiPreferencesStore((s) => s.contextBarPosition);
-  const setPosition = useUiPreferencesStore((s) => s.setContextBarPosition);
-  return [position, setPosition];
 }
 
 // Hook for pane size preference

@@ -28,12 +28,15 @@ import {
 export interface NavbarActionItem {
   type?: 'action';
   id: string;
-  icon: Icon;
+  icon?: Icon;
   isActive?: boolean;
   tooltip?: string;
   shortcut?: string;
   disabled?: boolean;
   onClick?: () => void;
+  // Custom-rendered content, used for actions whose icon is not a plain
+  // Phosphor icon (e.g. the editor logo or the copy-with-feedback button).
+  customContent?: ReactNode;
 }
 
 /**
@@ -215,6 +218,22 @@ export function Navbar({
       return <div key={key} className="h-4 w-px bg-border" />;
     }
 
+    if (item.customContent) {
+      return item.tooltip ? (
+        <Tooltip key={key} content={item.tooltip} shortcut={item.shortcut}>
+          {item.customContent}
+        </Tooltip>
+      ) : (
+        <div key={key} className="flex items-center">
+          {item.customContent}
+        </div>
+      );
+    }
+
+    if (!item.icon) {
+      return null;
+    }
+
     const isDisabled = !!item.disabled;
 
     return (
@@ -344,20 +363,22 @@ export function Navbar({
             {isOnProjectPage &&
               rightItems
                 .filter((item): item is NavbarActionItem => !isDivider(item))
-                .map((item) => (
-                  <NavbarIconButton
-                    key={item.id}
-                    icon={item.icon}
-                    isActive={item.isActive}
-                    onClick={item.onClick}
-                    aria-label={item.tooltip}
-                    tooltip={item.tooltip}
-                    disabled={!!item.disabled}
-                    className={
-                      item.disabled ? 'opacity-40 cursor-not-allowed' : ''
-                    }
-                  />
-                ))}
+                .map((item) =>
+                  item.icon ? (
+                    <NavbarIconButton
+                      key={item.id}
+                      icon={item.icon}
+                      isActive={item.isActive}
+                      onClick={item.onClick}
+                      aria-label={item.tooltip}
+                      tooltip={item.tooltip}
+                      disabled={!!item.disabled}
+                      className={
+                        item.disabled ? 'opacity-40 cursor-not-allowed' : ''
+                      }
+                    />
+                  ) : null
+                )}
             {onReload && (
               <button
                 type="button"

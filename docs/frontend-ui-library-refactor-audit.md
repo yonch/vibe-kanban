@@ -61,7 +61,6 @@ Date: 2026-02-21
 | `ui-new/primitives/Command.tsx` | `extract-now` | `@vibe/ui` | Primitive UI component; good first package candidate. |
 | `ui-new/primitives/CommandBar.tsx` | `extract-later` | `@vibe/ui` | Potentially reusable but needs API cleanup. Requires decoupling from @/components/*. |
 | `ui-new/primitives/CommentCard.tsx` | `keep-app` | `frontend-app` | Domain-specific primitive for kanban/chat/workspace flows. |
-| `ui-new/primitives/ContextBar.tsx` | `keep-app` | `frontend-app` | Domain-specific primitive for kanban/chat/workspace flows. |
 | `ui-new/primitives/ContextUsageGauge.tsx` | `keep-app` | `frontend-app` | Domain-specific primitive for kanban/chat/workspace flows. |
 | `ui-new/primitives/CreateChatBox.tsx` | `keep-app` | `frontend-app` | Domain-specific primitive for kanban/chat/workspace flows. |
 | `ui-new/primitives/Dialog.tsx` | `extract-later` | `@vibe/ui` | Primitive UI component; good first package candidate. Move after decoupling @/contexts. |
@@ -131,7 +130,6 @@ Date: 2026-02-21
 | `ui-new/containers/ChangesPanelContainer.tsx` | `keep-app` | `frontend-app` | State/data container; keep with app feature logic. |
 | `ui-new/containers/ColorPickerContainer.tsx` | `keep-app` | `frontend-app` | State/data container; keep with app feature logic. |
 | `ui-new/containers/CommentWidgetLine.tsx` | `keep-app` | `frontend-app` | State/data container; keep with app feature logic. |
-| `ui-new/containers/ContextBarContainer.tsx` | `keep-app` | `frontend-app` | State/data container; keep with app feature logic. |
 | `ui-new/containers/ConversationListContainer.tsx` | `keep-app` | `frontend-app` | State/data container; keep with app feature logic. |
 | `ui-new/containers/CopyButton.tsx` | `keep-app` | `frontend-app` | State/data container; keep with app feature logic. |
 | `ui-new/containers/CreateChatBoxContainer.tsx` | `keep-app` | `frontend-app` | State/data container; keep with app feature logic. |

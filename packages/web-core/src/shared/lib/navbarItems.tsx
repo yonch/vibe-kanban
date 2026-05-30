@@ -74,7 +74,10 @@ function buildSpecialContent(
         onClick={execute}
         disabled={!enabled}
       >
-        <IdeIcon editorType={ctx.editorType} className="size-icon-base" />
+        <IdeIcon
+          editorType={ctx.editorType}
+          className="size-icon-base opacity-60 hover:opacity-100 transition-opacity"
+        />
       </button>
     );
   }

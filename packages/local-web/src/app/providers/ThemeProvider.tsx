@@ -22,19 +22,31 @@ export function ThemeProvider({
   useEffect(() => {
     const root = window.document.documentElement;
 
-    root.classList.remove('light', 'dark');
+    const applyTheme = (resolvedTheme: 'light' | 'dark') => {
+      root.classList.remove('light', 'dark');
+      root.classList.add(resolvedTheme);
+    };
 
     if (theme === ThemeMode.SYSTEM) {
-      const systemTheme = window.matchMedia('(prefers-color-scheme: dark)')
-        .matches
-        ? 'dark'
-        : 'light';
+      const query = window.matchMedia('(prefers-color-scheme: dark)');
+      const applySystemTheme = () => {
+        applyTheme(query.matches ? 'dark' : 'light');
+      };
+      const handleSystemThemeChange = (event: MediaQueryListEvent) => {
+        applyTheme(event.matches ? 'dark' : 'light');
+      };
 
-      root.classList.add(systemTheme);
-      return;
+      applySystemTheme();
+      query.addEventListener('change', handleSystemThemeChange);
+      document.addEventListener('visibilitychange', applySystemTheme);
+
+      return () => {
+        query.removeEventListener('change', handleSystemThemeChange);
+        document.removeEventListener('visibilitychange', applySystemTheme);
+      };
     }
 
-    root.classList.add(theme.toLowerCase());
+    applyTheme(theme.toLowerCase() as 'light' | 'dark');
   }, [theme]);
 
   const setTheme = (newTheme: ThemeMode) => {

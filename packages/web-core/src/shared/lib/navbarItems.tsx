@@ -76,7 +76,11 @@ function buildSpecialContent(
       >
         <IdeIcon
           editorType={ctx.editorType}
-          className="size-icon-base opacity-60 hover:opacity-100 transition-opacity"
+          className={
+            enabled
+              ? 'size-icon-base opacity-60 hover:opacity-100 transition-opacity'
+              : 'size-icon-base'
+          }
         />
       </button>
     );

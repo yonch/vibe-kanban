@@ -105,9 +105,6 @@ pub struct UiPreferencesData {
     /// Expanded/collapsed state for UI sections
     #[serde(default)]
     pub expanded: std::collections::HashMap<String, bool>,
-    /// Context bar position
-    #[serde(default)]
-    pub context_bar_position: Option<String>,
     /// Pane sizes
     #[serde(default)]
     pub pane_sizes: std::collections::HashMap<String, serde_json::Value>,

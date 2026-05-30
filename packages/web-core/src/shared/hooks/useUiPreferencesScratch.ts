@@ -63,9 +63,6 @@ function storeToScratchData(state: {
   return {
     repo_actions: state.repoActions as { [key: string]: string },
     expanded: state.expanded,
-    // Deprecated: the floating context bar was removed; persist null to satisfy
-    // the generated UiPreferencesData shape.
-    context_bar_position: null,
     pane_sizes: state.paneSizes as { [key: string]: JsonValue },
     collapsed_paths: state.collapsedPaths,
     file_search_repo_id: state.fileSearchRepoId,

@@ -25,14 +25,18 @@ export function isNavbarDivider(
 
 /**
  * Filter navbar items by visibility, keeping dividers but removing them
- * if they would appear at the start, end, or consecutively.
+ * if they would appear at the start, end, or consecutively. `excludeIds`
+ * removes specific actions from this particular navbar without changing their
+ * global `isVisible` (so they remain reachable from the Command Bar).
  */
 export function filterNavbarItems(
   items: readonly ActionNavbarItem[],
-  ctx: ActionVisibilityContext
+  ctx: ActionVisibilityContext,
+  excludeIds?: ReadonlySet<string>
 ): ActionNavbarItem[] {
   const filtered = items.filter((item) => {
     if (isNavbarDivider(item)) return true;
+    if (excludeIds?.has(item.id)) return false;
     return isActionVisible(item, ctx);
   });
 

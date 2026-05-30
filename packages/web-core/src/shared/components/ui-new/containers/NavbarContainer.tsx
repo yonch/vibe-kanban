@@ -24,6 +24,7 @@ import {
   toNavbarSectionItems,
 } from '@/shared/lib/navbarItems';
 import { useActionVisibilityContext } from '@/shared/hooks/useActionVisibilityContext';
+import { isRealMobileDevice } from '@/shared/hooks/useIsMobile';
 import { useMobileActiveTab } from '@/shared/stores/useUiPreferencesStore';
 import { CommandBarDialog } from '@/shared/dialogs/command-bar/CommandBarDialog';
 import { SettingsDialog } from '@/shared/dialogs/settings/SettingsDialog';
@@ -31,6 +32,14 @@ import { getProjectDestination } from '@/shared/lib/routes/appNavigation';
 import { useAppNavigation } from '@/shared/hooks/useAppNavigation';
 import { useCurrentAppDestination } from '@/shared/hooks/useCurrentAppDestination';
 import { getRemoteAuthDegradedMessage } from '@/shared/lib/auth/remoteAuthDegraded';
+
+// Actions that don't fit the mobile navbar (customContent icons aren't supported
+// there). They stay globally visible so the Command Bar still surfaces them.
+const MOBILE_NAVBAR_EXCLUDED_ACTION_IDS: ReadonlySet<string> = new Set([
+  'open-in-ide',
+  'copy-workspace-path',
+  'toggle-dev-server',
+]);
 
 export function NavbarContainer({
   mobileMode = false,
@@ -76,6 +85,14 @@ export function NavbarContainer({
   // Get action visibility context (includes all state for visibility/active/enabled)
   const actionCtx = useActionVisibilityContext();
 
+  // On real mobile devices, exclude navbar-only actions from rendering here.
+  // The actions remain globally visible (Command Bar, kanban shortcuts, etc.).
+  const navbarExcludeIds = useMemo(
+    () =>
+      isRealMobileDevice() ? MOBILE_NAVBAR_EXCLUDED_ACTION_IDS : undefined,
+    []
+  );
+
   // Action handler - all actions go through the standard executeAction
   const handleExecuteAction = useCallback(
     (action: ActionDefinition) => {
@@ -91,21 +108,25 @@ export function NavbarContainer({
   const leftItems = useMemo(
     () =>
       toNavbarSectionItems(
-        filterNavbarItems(NavbarActionGroups.left, actionCtx),
+        filterNavbarItems(NavbarActionGroups.left, actionCtx, navbarExcludeIds),
         actionCtx,
         handleExecuteAction
       ),
-    [actionCtx, handleExecuteAction]
+    [actionCtx, handleExecuteAction, navbarExcludeIds]
   );
 
   const rightItems = useMemo(
     () =>
       toNavbarSectionItems(
-        filterNavbarItems(NavbarActionGroups.right, actionCtx),
+        filterNavbarItems(
+          NavbarActionGroups.right,
+          actionCtx,
+          navbarExcludeIds
+        ),
         actionCtx,
         handleExecuteAction
       ),
-    [actionCtx, handleExecuteAction]
+    [actionCtx, handleExecuteAction, navbarExcludeIds]
   );
 
   const navbarTitle = isCreateMode

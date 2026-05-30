@@ -63,7 +63,6 @@ import { workspaceRecordKeys } from '@/shared/hooks/useWorkspaceRecord';
 import { workspaceRepoKeys } from '@/shared/hooks/useWorkspaceRepo';
 import { repoBranchKeys } from '@/shared/hooks/useRepoBranches';
 import { workspaceSummaryKeys } from '@/shared/hooks/workspaceSummaryKeys';
-import { isRealMobileDevice } from '@/shared/hooks/useIsMobile';
 import { ConfirmDialog } from '@vibe/ui/components/ConfirmDialog';
 import { ChangeTargetDialog } from '@vibe/ui/components/ChangeTargetDialog';
 import { DeleteWorkspaceDialog } from '@vibe/ui/components/DeleteWorkspaceDialog';
@@ -820,7 +819,7 @@ export const Actions = {
     label: 'Open in IDE',
     icon: 'ide-icon' as const,
     requiresTarget: ActionTargetType.NONE,
-    isVisible: (ctx) => ctx.hasWorkspace && !isRealMobileDevice(),
+    isVisible: (ctx) => ctx.hasWorkspace,
     getTooltip: (ctx) => `Open in ${getIdeName(ctx.editorType)}`,
     execute: async (ctx) => {
       if (!ctx.currentWorkspaceId) return;
@@ -855,7 +854,7 @@ export const Actions = {
     icon: 'copy-icon' as const,
     shortcut: 'Y P',
     requiresTarget: ActionTargetType.NONE,
-    isVisible: (ctx) => ctx.hasWorkspace && !isRealMobileDevice(),
+    isVisible: (ctx) => ctx.hasWorkspace,
     execute: async (ctx) => {
       if (!ctx.containerRef) return;
       await navigator.clipboard.writeText(ctx.containerRef);
@@ -884,7 +883,7 @@ export const Actions = {
     icon: PlayIcon,
     shortcut: 'T D',
     requiresTarget: ActionTargetType.NONE,
-    isVisible: (ctx) => ctx.hasWorkspace && !isRealMobileDevice(),
+    isVisible: (ctx) => ctx.hasWorkspace,
     isEnabled: (ctx) =>
       ctx.devServerState !== 'starting' && ctx.devServerState !== 'stopping',
     getIcon: (ctx) => {

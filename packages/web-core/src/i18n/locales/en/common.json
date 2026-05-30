@@ -237,10 +237,6 @@
       "title": "Command Bar",
       "content": "The command bar is your central hub for navigation. Open it with CMD+K to search and access every action available in a workspace."
     },
-    "contextBar": {
-      "title": "Context Bar",
-      "content": "The context bar lets you switch between panes quickly. Drag it wherever works best for you."
-    },
     "sidebar": {
       "title": "Workspace Sidebar",
       "content": "See the status of all your workspaces at a glance. Notifications highlight which ones need attention. Archive merged workspaces to keep your sidebar clean."

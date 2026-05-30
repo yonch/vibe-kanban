@@ -11,7 +11,6 @@ import {
 const TOPIC_IDS = [
   'welcome',
   'commandBar',
-  'contextBar',
   'sidebar',
   'multiRepo',
   'sessions',
@@ -22,7 +21,6 @@ const TOPIC_IDS = [
 const TOPIC_IMAGES: Record<(typeof TOPIC_IDS)[number], string> = {
   welcome: '/guide-images/welcome.png',
   commandBar: '/guide-images/command-bar.png',
-  contextBar: '/guide-images/context-bar.png',
   sidebar: '/guide-images/sidebar.png',
   multiRepo: '/guide-images/multi-repo.png',
   sessions: '/guide-images/sessions.png',

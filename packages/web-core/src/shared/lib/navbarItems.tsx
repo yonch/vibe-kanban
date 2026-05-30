@@ -110,7 +110,7 @@ function getNavbarIconClassName(
       return 'animate-spin';
     }
     if (ctx.devServerState === 'running') {
-      return 'text-error hover:text-error';
+      return 'text-error';
     }
   }
   return undefined;

@@ -23,6 +23,18 @@ export function isNavbarDivider(
   return 'type' in item && item.type === 'divider';
 }
 
+// Actions that the mobile navbar layout cannot render (customContent icons
+// aren't supported in the mobile workspace navbar; the toggle-dev-server icon
+// renders but the floating-bar UX doesn't fit the mobile chrome). Trigger on
+// the viewport-driven mobile layout, not user-agent heuristics. Both the
+// local NavbarContainer and the remote RemoteNavbarContainer opt in so the
+// two chromes stay consistent on narrow viewports.
+export const MOBILE_NAVBAR_EXCLUDED_ACTION_IDS: ReadonlySet<string> = new Set([
+  'open-in-ide',
+  'copy-workspace-path',
+  'toggle-dev-server',
+]);
+
 /**
  * Filter navbar items by visibility, keeping dividers but removing them
  * if they would appear at the start, end, or consecutively. `excludeIds`

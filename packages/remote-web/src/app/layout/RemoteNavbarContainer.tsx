@@ -17,6 +17,7 @@ import { type ActionDefinition } from "@/shared/types/actions";
 import {
   filterNavbarItems,
   toNavbarSectionItems,
+  MOBILE_NAVBAR_EXCLUDED_ACTION_IDS,
 } from "@/shared/lib/navbarItems";
 
 interface RemoteNavbarContainerProps {
@@ -84,14 +85,22 @@ export function RemoteNavbarContainer({
     [executeAction, selectedWorkspace?.id],
   );
 
+  const navbarExcludeIds = mobileMode
+    ? MOBILE_NAVBAR_EXCLUDED_ACTION_IDS
+    : undefined;
+
   const rightItems = useMemo(
     () =>
       toNavbarSectionItems(
-        filterNavbarItems(NavbarActionGroups.right, actionCtx),
+        filterNavbarItems(
+          NavbarActionGroups.right,
+          actionCtx,
+          navbarExcludeIds,
+        ),
         actionCtx,
         handleExecuteAction,
       ),
-    [actionCtx, handleExecuteAction],
+    [actionCtx, handleExecuteAction, navbarExcludeIds],
   );
 
   const workspaceTitle = useMemo(() => {

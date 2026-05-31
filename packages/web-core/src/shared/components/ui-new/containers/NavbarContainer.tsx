@@ -22,6 +22,7 @@ import { type ActionDefinition } from '@/shared/types/actions';
 import {
   filterNavbarItems,
   toNavbarSectionItems,
+  MOBILE_NAVBAR_EXCLUDED_ACTION_IDS,
 } from '@/shared/lib/navbarItems';
 import { useActionVisibilityContext } from '@/shared/hooks/useActionVisibilityContext';
 import { useMobileActiveTab } from '@/shared/stores/useUiPreferencesStore';
@@ -31,17 +32,6 @@ import { getProjectDestination } from '@/shared/lib/routes/appNavigation';
 import { useAppNavigation } from '@/shared/hooks/useAppNavigation';
 import { useCurrentAppDestination } from '@/shared/hooks/useCurrentAppDestination';
 import { getRemoteAuthDegradedMessage } from '@/shared/lib/auth/remoteAuthDegraded';
-
-// Actions that don't fit the mobile navbar layout (customContent icons aren't
-// rendered in the mobile workspace navbar). They stay globally visible so the
-// Command Bar still surfaces them. Trigger on the viewport-driven mobile
-// layout switch, not user-agent heuristics, so narrow desktop viewports get
-// the same exclusion the mobile chrome already applies.
-const MOBILE_NAVBAR_EXCLUDED_ACTION_IDS: ReadonlySet<string> = new Set([
-  'open-in-ide',
-  'copy-workspace-path',
-  'toggle-dev-server',
-]);
 
 export function NavbarContainer({
   mobileMode = false,

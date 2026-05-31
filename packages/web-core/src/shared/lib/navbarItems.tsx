@@ -101,10 +101,9 @@ function buildSpecialContent(
 }
 
 /**
- * Per-icon classes for actions whose navbar glyph needs a state cue. Ports the
- * dev-server spin/color logic from the removed ContextBar (D-001): the glyph is
- * swapped to a spinner during transitions and must animate, and turns red while
- * the server is running.
+ * Per-icon classes for actions whose navbar glyph needs a state cue: the
+ * dev-server glyph is swapped to a spinner during transitions and must animate,
+ * and turns red while the server is running.
  */
 function getNavbarIconClassName(
   action: ActionDefinition,

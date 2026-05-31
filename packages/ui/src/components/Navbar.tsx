@@ -28,12 +28,18 @@ import {
 export interface NavbarActionItem {
   type?: 'action';
   id: string;
-  icon: Icon;
+  icon?: Icon;
+  // Extra classes applied to the icon glyph, for action-specific state cues
+  // (e.g. ToggleDevServer's animate-spin during transitions, red when running).
+  iconClassName?: string;
   isActive?: boolean;
   tooltip?: string;
   shortcut?: string;
   disabled?: boolean;
   onClick?: () => void;
+  // Custom-rendered content, used for actions whose icon is not a plain
+  // Phosphor icon (e.g. the editor logo or the copy-with-feedback button).
+  customContent?: ReactNode;
 }
 
 /**
@@ -53,6 +59,7 @@ function isDivider(item: NavbarSectionItem): item is NavbarDividerItem {
 interface NavbarIconButtonProps
   extends ButtonHTMLAttributes<HTMLButtonElement> {
   icon: Icon;
+  iconClassName?: string;
   isActive?: boolean;
   tooltip?: string;
   shortcut?: string;
@@ -60,6 +67,7 @@ interface NavbarIconButtonProps
 
 function NavbarIconButton({
   icon: IconComponent,
+  iconClassName,
   isActive = false,
   tooltip,
   shortcut,
@@ -78,7 +86,7 @@ function NavbarIconButton({
       {...props}
     >
       <IconComponent
-        className="size-icon-base"
+        className={cn('size-icon-base', iconClassName)}
         weight={isActive ? 'fill' : 'regular'}
       />
     </button>
@@ -215,12 +223,29 @@ export function Navbar({
       return <div key={key} className="h-4 w-px bg-border" />;
     }
 
+    if (item.customContent) {
+      return item.tooltip ? (
+        <Tooltip key={key} content={item.tooltip} shortcut={item.shortcut}>
+          {item.customContent}
+        </Tooltip>
+      ) : (
+        <div key={key} className="group flex items-center">
+          {item.customContent}
+        </div>
+      );
+    }
+
+    if (!item.icon) {
+      return null;
+    }
+
     const isDisabled = !!item.disabled;
 
     return (
       <NavbarIconButton
         key={key}
         icon={item.icon}
+        iconClassName={item.iconClassName}
         isActive={item.isActive}
         onClick={item.onClick}
         aria-label={item.tooltip}
@@ -341,23 +366,31 @@ export function Navbar({
           {/* Right side: sync indicator + action buttons + user slot */}
           <div className="flex items-center gap-1 shrink-0">
             <SyncErrorIndicator errors={syncErrors} />
+            {/*
+              This map renders plain-icon actions only. customContent actions
+              (Open in IDE, Copy Path) carry no plain icon and are
+              intentionally omitted on mobile.
+            */}
             {isOnProjectPage &&
               rightItems
                 .filter((item): item is NavbarActionItem => !isDivider(item))
-                .map((item) => (
-                  <NavbarIconButton
-                    key={item.id}
-                    icon={item.icon}
-                    isActive={item.isActive}
-                    onClick={item.onClick}
-                    aria-label={item.tooltip}
-                    tooltip={item.tooltip}
-                    disabled={!!item.disabled}
-                    className={
-                      item.disabled ? 'opacity-40 cursor-not-allowed' : ''
-                    }
-                  />
-                ))}
+                .map((item) =>
+                  item.icon ? (
+                    <NavbarIconButton
+                      key={item.id}
+                      icon={item.icon}
+                      iconClassName={item.iconClassName}
+                      isActive={item.isActive}
+                      onClick={item.onClick}
+                      aria-label={item.tooltip}
+                      tooltip={item.tooltip}
+                      disabled={!!item.disabled}
+                      className={
+                        item.disabled ? 'opacity-40 cursor-not-allowed' : ''
+                      }
+                    />
+                  ) : null
+                )}
             {onReload && (
               <button
                 type="button"

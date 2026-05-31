@@ -14,7 +14,6 @@ interface WorkspacesMainProps {
   containerRef: RefObject<HTMLElement>;
   conversationContent?: ReactNode;
   chatBoxContent: ReactNode;
-  contextBarContent?: ReactNode;
   isAtBottom?: boolean;
   onAtBottomChange?: (atBottom: boolean) => void;
   onScrollToBottom?: (behavior?: 'auto' | 'smooth') => void;
@@ -28,7 +27,6 @@ export function WorkspacesMain({
   containerRef,
   conversationContent,
   chatBoxContent,
-  contextBarContent,
   isAtBottom = true,
   onScrollToBottom,
   isMobile,
@@ -86,8 +84,6 @@ export function WorkspacesMain({
       >
         {chatBoxContent}
       </div>
-      {/* Context Bar - floating toolbar */}
-      {workspaceWithSession ? contextBarContent : null}
     </main>
   );
 }

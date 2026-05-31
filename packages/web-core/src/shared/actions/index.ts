@@ -813,7 +813,7 @@ export const Actions = {
     },
   },
 
-  // === ContextBar Actions ===
+  // === Workspace Context Actions ===
   OpenInIDE: {
     id: 'open-in-ide',
     label: 'Open in IDE',
@@ -1611,20 +1611,14 @@ export const NavbarActionGroups = {
     Actions.TogglePreviewMode,
     Actions.ToggleRightSidebar,
     NavbarDivider,
+    Actions.OpenInIDE,
+    Actions.ToggleDevServer,
+    Actions.CopyWorkspacePath,
+    NavbarDivider,
     Actions.OpenCommandBar,
     Actions.Feedback,
     Actions.WorkspacesGuide,
     Actions.ProjectsGuide,
     Actions.Settings,
   ] as NavbarItem[],
-};
-
-// ContextBar action groups define which actions appear in each section
-export const ContextBarActionGroups = {
-  primary: [Actions.OpenInIDE, Actions.CopyWorkspacePath] as ActionDefinition[],
-  secondary: [
-    Actions.ToggleDevServer,
-    Actions.TogglePreviewMode,
-    Actions.ToggleChangesMode,
-  ] as ActionDefinition[],
 };

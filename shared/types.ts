@@ -80,10 +80,6 @@ repo_actions: { [key in string]?: string },
  */
 expanded: { [key in string]?: boolean }, 
 /**
- * Context bar position
- */
-context_bar_position: string | null, 
-/**
  * Pane sizes
  */
 pane_sizes: { [key in string]?: JsonValue }, 

@@ -8,7 +8,6 @@ import { useUserOrganizations } from '@/shared/hooks/useUserOrganizations';
 import { useOrganizationStore } from '@/shared/stores/useOrganizationStore';
 import {
   Navbar,
-  type NavbarSectionItem,
   type NavbarBreadcrumbItem,
   type MobileTabId,
 } from '@vibe/ui/components/Navbar';
@@ -19,18 +18,12 @@ import { RemoteIssueLink } from './RemoteIssueLink';
 import { AppBarUserPopoverContainer } from './AppBarUserPopoverContainer';
 import { useUserSystem } from '@/shared/hooks/useUserSystem';
 import { NavbarActionGroups, Actions } from '@/shared/actions';
+import { type ActionDefinition } from '@/shared/types/actions';
 import {
-  NavbarDivider,
-  type ActionDefinition,
-  type NavbarItem as ActionNavbarItem,
-  type ActionVisibilityContext,
-  isSpecialIcon,
-  getActionIcon,
-  getActionTooltip,
-  isActionActive,
-  isActionEnabled,
-  isActionVisible,
-} from '@/shared/types/actions';
+  filterNavbarItems,
+  toNavbarSectionItems,
+  MOBILE_NAVBAR_EXCLUDED_ACTION_IDS,
+} from '@/shared/lib/navbarItems';
 import { useActionVisibilityContext } from '@/shared/hooks/useActionVisibilityContext';
 import { useMobileActiveTab } from '@/shared/stores/useUiPreferencesStore';
 import { CommandBarDialog } from '@/shared/dialogs/command-bar/CommandBarDialog';
@@ -39,79 +32,6 @@ import { getProjectDestination } from '@/shared/lib/routes/appNavigation';
 import { useAppNavigation } from '@/shared/hooks/useAppNavigation';
 import { useCurrentAppDestination } from '@/shared/hooks/useCurrentAppDestination';
 import { getRemoteAuthDegradedMessage } from '@/shared/lib/auth/remoteAuthDegraded';
-
-/**
- * Check if a NavbarItem is a divider
- */
-function isDivider(item: ActionNavbarItem): item is typeof NavbarDivider {
-  return 'type' in item && item.type === 'divider';
-}
-
-/**
- * Filter navbar items by visibility, keeping dividers but removing them
- * if they would appear at the start, end, or consecutively.
- */
-function filterNavbarItems(
-  items: readonly ActionNavbarItem[],
-  ctx: ActionVisibilityContext
-): ActionNavbarItem[] {
-  // Filter actions by visibility, keep dividers
-  const filtered = items.filter((item) => {
-    if (isDivider(item)) return true;
-    if (!isActionVisible(item, ctx)) return false;
-    return !isSpecialIcon(getActionIcon(item, ctx));
-  });
-
-  // Remove leading/trailing dividers and consecutive dividers
-  const result: ActionNavbarItem[] = [];
-  for (const item of filtered) {
-    if (isDivider(item)) {
-      // Only add divider if we have items before it and last item wasn't a divider
-      if (result.length > 0 && !isDivider(result[result.length - 1])) {
-        result.push(item);
-      }
-    } else {
-      result.push(item);
-    }
-  }
-
-  // Remove trailing divider
-  if (result.length > 0 && isDivider(result[result.length - 1])) {
-    result.pop();
-  }
-
-  return result;
-}
-
-function toNavbarSectionItems(
-  items: readonly ActionNavbarItem[],
-  ctx: ActionVisibilityContext,
-  onExecuteAction: (action: ActionDefinition) => void
-): NavbarSectionItem[] {
-  return items.reduce<NavbarSectionItem[]>((result, item) => {
-    if (isDivider(item)) {
-      result.push({ type: 'divider' });
-      return result;
-    }
-
-    const icon = getActionIcon(item, ctx);
-    if (isSpecialIcon(icon)) {
-      return result;
-    }
-
-    result.push({
-      type: 'action',
-      id: item.id,
-      icon,
-      isActive: isActionActive(item, ctx),
-      tooltip: getActionTooltip(item, ctx),
-      shortcut: item.shortcut,
-      disabled: !isActionEnabled(item, ctx),
-      onClick: () => onExecuteAction(item),
-    });
-    return result;
-  }, []);
-}
 
 export function NavbarContainer({
   mobileMode = false,
@@ -157,6 +77,13 @@ export function NavbarContainer({
   // Get action visibility context (includes all state for visibility/active/enabled)
   const actionCtx = useActionVisibilityContext();
 
+  // In the viewport-mobile layout (NavbarContainer's mobileMode prop, driven
+  // by useIsMobile()), exclude navbar-only actions from rendering here.
+  // The actions remain globally visible (Command Bar, kanban shortcuts, etc.).
+  const navbarExcludeIds = mobileMode
+    ? MOBILE_NAVBAR_EXCLUDED_ACTION_IDS
+    : undefined;
+
   // Action handler - all actions go through the standard executeAction
   const handleExecuteAction = useCallback(
     (action: ActionDefinition) => {
@@ -172,21 +99,25 @@ export function NavbarContainer({
   const leftItems = useMemo(
     () =>
       toNavbarSectionItems(
-        filterNavbarItems(NavbarActionGroups.left, actionCtx),
+        filterNavbarItems(NavbarActionGroups.left, actionCtx, navbarExcludeIds),
         actionCtx,
         handleExecuteAction
       ),
-    [actionCtx, handleExecuteAction]
+    [actionCtx, handleExecuteAction, navbarExcludeIds]
   );
 
   const rightItems = useMemo(
     () =>
       toNavbarSectionItems(
-        filterNavbarItems(NavbarActionGroups.right, actionCtx),
+        filterNavbarItems(
+          NavbarActionGroups.right,
+          actionCtx,
+          navbarExcludeIds
+        ),
         actionCtx,
         handleExecuteAction
       ),
-    [actionCtx, handleExecuteAction]
+    [actionCtx, handleExecuteAction, navbarExcludeIds]
   );
 
   const navbarTitle = isCreateMode

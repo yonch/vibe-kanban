@@ -73,18 +73,6 @@ export const RightSidebar = memo(function RightSidebar({
     false
   );
 
-  const hasUpperContent =
-    rightMainPanelMode === RIGHT_MAIN_PANEL_MODES.LOGS ||
-    rightMainPanelMode === RIGHT_MAIN_PANEL_MODES.PREVIEW;
-
-  const upperExpanded = (() => {
-    if (rightMainPanelMode === RIGHT_MAIN_PANEL_MODES.LOGS)
-      return processesExpanded;
-    if (rightMainPanelMode === RIGHT_MAIN_PANEL_MODES.PREVIEW)
-      return devServerExpanded;
-    return false;
-  })();
-
   const sections: SectionDef[] = useMemo(() => {
     const result: SectionDef[] = [
       {
@@ -144,8 +132,8 @@ export const RightSidebar = memo(function RightSidebar({
         result.unshift({
           title: 'Logs',
           persistKey: PERSIST_KEYS.rightPanelprocesses,
-          visible: hasUpperContent,
-          expanded: upperExpanded,
+          visible: true,
+          expanded: processesExpanded,
           content: <ProcessListContainer />,
           actions: [],
         });
@@ -155,8 +143,8 @@ export const RightSidebar = memo(function RightSidebar({
           result.unshift({
             title: 'Preview',
             persistKey: PERSIST_KEYS.rightPanelPreview,
-            visible: hasUpperContent,
-            expanded: upperExpanded,
+            visible: true,
+            expanded: devServerExpanded,
             content: (
               <PreviewControlsContainer
                 workspaceId={selectedWorkspace.id}
@@ -185,8 +173,6 @@ export const RightSidebar = memo(function RightSidebar({
     devServerExpanded,
     isTerminalVisible,
     isTerminalExpanded,
-    hasUpperContent,
-    upperExpanded,
     expandTerminal,
     t,
   ]);

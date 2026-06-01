@@ -126,8 +126,6 @@ export const RightSidebar = memo(function RightSidebar({
     ];
 
     switch (rightMainPanelMode) {
-      case RIGHT_MAIN_PANEL_MODES.CHANGES:
-        break;
       case RIGHT_MAIN_PANEL_MODES.LOGS:
         result.unshift({
           title: 'Logs',

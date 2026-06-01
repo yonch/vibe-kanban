@@ -74,13 +74,10 @@ export const RightSidebar = memo(function RightSidebar({
   );
 
   const hasUpperContent =
-    rightMainPanelMode === RIGHT_MAIN_PANEL_MODES.CHANGES ||
     rightMainPanelMode === RIGHT_MAIN_PANEL_MODES.LOGS ||
     rightMainPanelMode === RIGHT_MAIN_PANEL_MODES.PREVIEW;
 
   const upperExpanded = (() => {
-    if (rightMainPanelMode === RIGHT_MAIN_PANEL_MODES.CHANGES)
-      return changesExpanded;
     if (rightMainPanelMode === RIGHT_MAIN_PANEL_MODES.LOGS)
       return processesExpanded;
     if (rightMainPanelMode === RIGHT_MAIN_PANEL_MODES.PREVIEW)
@@ -103,6 +100,25 @@ export const RightSidebar = memo(function RightSidebar({
         ),
         actions: [],
       },
+      ...(selectedWorkspace
+        ? [
+            {
+              title: 'Changes',
+              persistKey: PERSIST_KEYS.changesSection,
+              visible: true,
+              expanded: changesExpanded,
+              content: (
+                <FileTreeContainer
+                  key={selectedWorkspace.id}
+                  workspaceId={selectedWorkspace.id}
+                  diffs={diffs}
+                  className=""
+                />
+              ),
+              actions: [],
+            },
+          ]
+        : []),
       {
         title: 'Terminal',
         persistKey: PERSIST_KEYS.terminalSection,
@@ -123,23 +139,6 @@ export const RightSidebar = memo(function RightSidebar({
 
     switch (rightMainPanelMode) {
       case RIGHT_MAIN_PANEL_MODES.CHANGES:
-        if (selectedWorkspace) {
-          result.unshift({
-            title: 'Changes',
-            persistKey: PERSIST_KEYS.changesSection,
-            visible: hasUpperContent,
-            expanded: upperExpanded,
-            content: (
-              <FileTreeContainer
-                key={selectedWorkspace.id}
-                workspaceId={selectedWorkspace.id}
-                diffs={diffs}
-                className=""
-              />
-            ),
-            actions: [],
-          });
-        }
         break;
       case RIGHT_MAIN_PANEL_MODES.LOGS:
         result.unshift({

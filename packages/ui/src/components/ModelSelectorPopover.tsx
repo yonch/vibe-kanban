@@ -60,22 +60,33 @@ function getModelSortLabel(model: ModelListModel): string {
   return model.name || model.id;
 }
 
+function compareLabels(a: string, b: string): number {
+  return a.localeCompare(b, undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
+}
+
 function sortModelsAlphabetically(models: ModelListModel[]): ModelListModel[] {
   return [...models].sort((a, b) => {
-    const labelComparison = getModelSortLabel(a).localeCompare(
-      getModelSortLabel(b),
-      undefined,
-      {
-        numeric: true,
-        sensitivity: 'base',
-      }
+    const labelComparison = compareLabels(
+      getModelSortLabel(a),
+      getModelSortLabel(b)
     );
     if (labelComparison !== 0) return labelComparison;
 
-    return getModelKey(a).localeCompare(getModelKey(b), undefined, {
-      numeric: true,
-      sensitivity: 'base',
-    });
+    return compareLabels(getModelKey(a), getModelKey(b));
+  });
+}
+
+function sortProvidersAlphabetically(
+  providers: ModelSelectorProvider[]
+): ModelSelectorProvider[] {
+  return [...providers].sort((a, b) => {
+    const nameComparison = compareLabels(a.name, b.name);
+    if (nameComparison !== 0) return nameComparison;
+
+    return compareLabels(a.id, b.id);
   });
 }
 
@@ -159,7 +170,7 @@ function ProviderAccordion({
   }
 
   const isDefaultSelected = selectedModelId === null;
-  const providers = config.providers;
+  const providers = sortProvidersAlphabetically(config.providers);
 
   return (
     <div

@@ -408,4 +408,17 @@ mod tests {
         assert_eq!(value["priority"], "priority");
         assert_eq!(value["nested"]["serviceTier"], "fast");
     }
+
+    #[test]
+    fn codex_service_tier_enum_still_needs_priority_workaround() {
+        let result =
+            serde_json::from_value::<codex_protocol::config_types::ServiceTier>(json!("priority"));
+
+        assert!(
+            result.is_err(),
+            "codex_protocol::config_types::ServiceTier now accepts \"priority\". \
+             Check whether the enum has a Priority variant and, if so, remove \
+             normalize_priority_service_tier and the retry workaround."
+        );
+    }
 }

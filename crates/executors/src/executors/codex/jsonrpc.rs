@@ -254,11 +254,7 @@ where
     };
 
     match response {
-        Ok(PendingResponse::Result(value)) => serde_json::from_value(value).map_err(|err| {
-            ExecutorError::Io(io::Error::other(format!(
-                "failed to decode {label} response: {err}",
-            )))
-        }),
+        Ok(PendingResponse::Result(value)) => decode_response_value(value, label),
         Ok(PendingResponse::Error(error)) => Err(ExecutorError::Io(io::Error::other(format!(
             "{label} request failed: {}",
             error.error.message
@@ -269,6 +265,62 @@ where
         Err(_) => Err(ExecutorError::Io(io::Error::other(format!(
             "{label} request was dropped",
         )))),
+    }
+}
+
+fn decode_response_value<R>(value: Value, label: &str) -> Result<R, ExecutorError>
+where
+    R: DeserializeOwned + Debug,
+{
+    match serde_json::from_value(value.clone()) {
+        Ok(response) => Ok(response),
+        Err(err) => {
+            let error_message = err.to_string();
+            if !is_priority_service_tier_error(&error_message) {
+                return Err(decode_error(label, error_message));
+            }
+
+            let mut normalized = value;
+            if normalize_priority_service_tier(&mut normalized) {
+                serde_json::from_value(normalized)
+                    .map_err(|retry_err| decode_error(label, retry_err.to_string()))
+            } else {
+                Err(decode_error(label, error_message))
+            }
+        }
+    }
+}
+
+fn decode_error(label: &str, error_message: String) -> ExecutorError {
+    ExecutorError::Io(io::Error::other(format!(
+        "failed to decode {label} response: {error_message}",
+    )))
+}
+
+fn is_priority_service_tier_error(error_message: &str) -> bool {
+    error_message.contains("unknown variant `priority`")
+        && error_message.contains("fast")
+        && error_message.contains("flex")
+}
+
+fn normalize_priority_service_tier(value: &mut Value) -> bool {
+    match value {
+        Value::Object(map) => {
+            let mut changed = false;
+            for (key, child) in map.iter_mut() {
+                if matches!(key.as_str(), "serviceTier" | "service_tier")
+                    && matches!(child.as_str(), Some("priority"))
+                {
+                    *child = Value::String("fast".to_string());
+                    changed = true;
+                } else {
+                    changed |= normalize_priority_service_tier(child);
+                }
+            }
+            changed
+        }
+        Value::Array(items) => items.iter_mut().any(normalize_priority_service_tier),
+        _ => false,
     }
 }
 
@@ -303,4 +355,57 @@ pub trait JsonRpcCallbacks: Send + Sync {
     ) -> Result<bool, ExecutorError>;
 
     async fn on_non_json(&self, _raw: &str) -> Result<(), ExecutorError>;
+}
+
+#[cfg(test)]
+mod tests {
+    use serde::Deserialize;
+    use serde_json::json;
+
+    use super::*;
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(rename_all = "camelCase")]
+    struct TestThreadStartResponse {
+        service_tier: Option<TestServiceTier>,
+    }
+
+    #[derive(Debug, Deserialize, PartialEq)]
+    #[serde(rename_all = "lowercase")]
+    enum TestServiceTier {
+        Fast,
+        Flex,
+    }
+
+    #[test]
+    fn decodes_priority_service_tier_as_fast() {
+        let response: TestThreadStartResponse = decode_response_value(
+            json!({
+                "serviceTier": "priority",
+            }),
+            "thread/start",
+        )
+        .expect("priority service tier should be normalized");
+
+        assert_eq!(
+            response,
+            TestThreadStartResponse {
+                service_tier: Some(TestServiceTier::Fast),
+            }
+        );
+    }
+
+    #[test]
+    fn leaves_other_priority_fields_untouched() {
+        let mut value = json!({
+            "priority": "priority",
+            "nested": {
+                "serviceTier": "priority",
+            },
+        });
+
+        assert!(normalize_priority_service_tier(&mut value));
+        assert_eq!(value["priority"], "priority");
+        assert_eq!(value["nested"]["serviceTier"], "fast");
+    }
 }

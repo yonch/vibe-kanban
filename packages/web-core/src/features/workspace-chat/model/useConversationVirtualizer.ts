@@ -177,6 +177,9 @@ export function useConversationVirtualizer({
       const row = rows[index];
       return row ? row.semanticKey : index;
     },
+    anchorTo: 'end',
+    followOnAppend: 'auto',
+    scrollEndThreshold: NEAR_BOTTOM_THRESHOLD_PX,
     overscan: OVERSCAN,
     measureElement: defaultMeasureElement,
     useAnimationFrameWithResizeObserver: false,

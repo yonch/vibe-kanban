@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Dialog,
@@ -30,6 +30,7 @@ const RenameSessionDialogImpl = NiceModal.create<RenameSessionDialogProps>(
     const [name, setName] = useState<string>(currentName);
     const [error, setError] = useState<string | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const nameInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
       if (modal.visible) {
@@ -38,6 +39,12 @@ const RenameSessionDialogImpl = NiceModal.create<RenameSessionDialogProps>(
         setIsSubmitting(false);
       }
     }, [modal.visible, currentName]);
+
+    useLayoutEffect(() => {
+      if (!modal.visible) return;
+
+      nameInputRef.current?.focus();
+    }, [modal.visible]);
 
     const handleConfirm = async () => {
       const trimmedName = name.trim();
@@ -90,6 +97,7 @@ const RenameSessionDialogImpl = NiceModal.create<RenameSessionDialogProps>(
           <div className="space-y-4">
             <div className="space-y-2">
               <Input
+                ref={nameInputRef}
                 id="session-name"
                 type="text"
                 value={name}

@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   Dialog,
@@ -30,11 +30,23 @@ const RenameWorkspaceDialogImpl = NiceModal.create<RenameWorkspaceDialogProps>(
     const [name, setName] = useState<string>(currentName);
     const [error, setError] = useState<string | null>(null);
     const [isSubmitting, setIsSubmitting] = useState(false);
+    const nameInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
-      setName(currentName);
-      setError(null);
-    }, [currentName]);
+      if (modal.visible) {
+        setName(currentName);
+        setError(null);
+        setIsSubmitting(false);
+      }
+    }, [modal.visible, currentName]);
+
+    useLayoutEffect(() => {
+      if (!modal.visible) return;
+
+      const input = nameInputRef.current;
+      input?.focus();
+      input?.select();
+    }, [modal.visible]);
 
     const handleConfirm = async () => {
       const trimmedName = name.trim();
@@ -90,6 +102,7 @@ const RenameWorkspaceDialogImpl = NiceModal.create<RenameWorkspaceDialogProps>(
                 {t('workspaces.rename.nameLabel')}
               </label>
               <Input
+                ref={nameInputRef}
                 id="workspace-name"
                 type="text"
                 value={name}
@@ -104,7 +117,6 @@ const RenameWorkspaceDialogImpl = NiceModal.create<RenameWorkspaceDialogProps>(
                 }}
                 placeholder={t('workspaces.rename.placeholder')}
                 disabled={isSubmitting}
-                autoFocus
               />
               {error && <p className="text-sm text-destructive">{error}</p>}
             </div>

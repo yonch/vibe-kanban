@@ -262,6 +262,7 @@ export function SessionChatBox<TExecutor extends string = string>({
   const { t } = useTranslation('tasks');
   const fileInputRef = useRef<HTMLInputElement>(null);
   const askQuestionBannerRef = useRef<AskUserQuestionBannerHandle>(null);
+  const preventNextSessionDropdownAutoFocus = useRef(false);
 
   // Determine if in feedback mode, edit mode, or approval mode
   const isInFeedbackMode = feedbackMode?.isActive ?? false;
@@ -822,6 +823,12 @@ export function SessionChatBox<TExecutor extends string = string>({
             disabled={isInFeedbackMode || isInEditMode || isInApprovalMode}
             className="min-w-0 max-w-[120px]"
             onOpenChange={onDropdownOpenChange}
+            onCloseAutoFocus={(event) => {
+              if (!preventNextSessionDropdownAutoFocus.current) return;
+
+              preventNextSessionDropdownAutoFocus.current = false;
+              event.preventDefault();
+            }}
             side="top"
           >
             {sessions.length > 0 ? (
@@ -867,12 +874,13 @@ export function SessionChatBox<TExecutor extends string = string>({
             {onRenameSession && selectedSessionId && !isNewSessionMode && (
               <DropdownMenuItem
                 icon={PencilSimpleIcon}
-                onClick={() =>
+                onClick={() => {
+                  preventNextSessionDropdownAutoFocus.current = true;
                   onRenameSession(
                     selectedSessionId,
                     selectedSessionObj?.name ?? ''
-                  )
-                }
+                  );
+                }}
               >
                 {t('conversation.sessions.rename')}
               </DropdownMenuItem>

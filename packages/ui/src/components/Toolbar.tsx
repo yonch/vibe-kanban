@@ -63,6 +63,7 @@ interface ToolbarDropdownProps {
   className?: string;
   disabled?: boolean;
   onOpenChange?: (open: boolean) => void;
+  onCloseAutoFocus?: (event: Event) => void;
   side?: 'top' | 'right' | 'bottom' | 'left';
 }
 
@@ -73,6 +74,7 @@ function ToolbarDropdown({
   className,
   disabled,
   onOpenChange,
+  onCloseAutoFocus,
   side,
 }: ToolbarDropdownProps) {
   const { t } = useTranslation('common');
@@ -85,7 +87,7 @@ function ToolbarDropdown({
         className={className}
         disabled={disabled}
       />
-      <DropdownMenuContent side={side}>
+      <DropdownMenuContent side={side} onCloseAutoFocus={onCloseAutoFocus}>
         {children ?? (
           <>
             <DropdownMenuLabel>{t('toolbar.sortBy')}</DropdownMenuLabel>

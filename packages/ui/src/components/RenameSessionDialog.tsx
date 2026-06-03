@@ -43,7 +43,9 @@ const RenameSessionDialogImpl = NiceModal.create<RenameSessionDialogProps>(
     useLayoutEffect(() => {
       if (!modal.visible) return;
 
-      nameInputRef.current?.focus();
+      const input = nameInputRef.current;
+      input?.focus();
+      input?.select();
     }, [modal.visible]);
 
     const handleConfirm = async () => {

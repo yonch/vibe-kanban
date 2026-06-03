@@ -272,7 +272,7 @@ fn decode_response_value<R>(value: Value, label: &str) -> Result<R, ExecutorErro
 where
     R: DeserializeOwned + Debug,
 {
-    match serde_json::from_value(value.clone()) {
+    match R::deserialize(&value) {
         Ok(response) => Ok(response),
         Err(err) => {
             let error_message = err.to_string();

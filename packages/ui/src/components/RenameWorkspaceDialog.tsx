@@ -33,9 +33,12 @@ const RenameWorkspaceDialogImpl = NiceModal.create<RenameWorkspaceDialogProps>(
     const nameInputRef = useRef<HTMLInputElement>(null);
 
     useEffect(() => {
-      setName(currentName);
-      setError(null);
-    }, [currentName]);
+      if (modal.visible) {
+        setName(currentName);
+        setError(null);
+        setIsSubmitting(false);
+      }
+    }, [modal.visible, currentName]);
 
     useLayoutEffect(() => {
       if (!modal.visible) return;

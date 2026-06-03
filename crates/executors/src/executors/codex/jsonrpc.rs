@@ -319,7 +319,13 @@ fn normalize_priority_service_tier(value: &mut Value) -> bool {
             }
             changed
         }
-        Value::Array(items) => items.iter_mut().any(normalize_priority_service_tier),
+        Value::Array(items) => {
+            let mut changed = false;
+            for item in items {
+                changed |= normalize_priority_service_tier(item);
+            }
+            changed
+        }
         _ => false,
     }
 }
@@ -407,6 +413,18 @@ mod tests {
         assert!(normalize_priority_service_tier(&mut value));
         assert_eq!(value["priority"], "priority");
         assert_eq!(value["nested"]["serviceTier"], "fast");
+    }
+
+    #[test]
+    fn normalizes_priority_service_tier_in_every_array_item() {
+        let mut value = json!([
+            { "serviceTier": "priority" },
+            { "serviceTier": "priority" },
+        ]);
+
+        assert!(normalize_priority_service_tier(&mut value));
+        assert_eq!(value[0]["serviceTier"], "fast");
+        assert_eq!(value[1]["serviceTier"], "fast");
     }
 
     #[test]

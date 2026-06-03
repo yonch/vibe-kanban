@@ -112,7 +112,6 @@ const RenameSessionDialogImpl = NiceModal.create<RenameSessionDialogProps>(
                 }}
                 placeholder={t('conversation.sessions.renamePlaceholder')}
                 disabled={isSubmitting}
-                autoFocus
               />
               {error && <p className="text-sm text-destructive">{error}</p>}
             </div>

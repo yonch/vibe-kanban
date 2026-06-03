@@ -115,7 +115,6 @@ const RenameWorkspaceDialogImpl = NiceModal.create<RenameWorkspaceDialogProps>(
                 }}
                 placeholder={t('workspaces.rename.placeholder')}
                 disabled={isSubmitting}
-                autoFocus
               />
               {error && <p className="text-sm text-destructive">{error}</p>}
             </div>

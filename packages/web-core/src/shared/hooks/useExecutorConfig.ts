@@ -7,6 +7,7 @@ import type {
 } from 'shared/types';
 import { getVariantOptions } from '@/shared/lib/executor';
 import { usePresetOptions } from '@/shared/hooks/usePresetOptions';
+import { toPrettyCase } from '@/shared/lib/string';
 
 function getProfileKey(
   executor: BaseCodingAgent | null,
@@ -23,6 +24,23 @@ const OVERRIDE_FIELDS = [
   'permission_policy',
 ] as const;
 
+function compareExecutorLabels(a: BaseCodingAgent, b: BaseCodingAgent) {
+  const labelComparison = toPrettyCase(a).localeCompare(
+    toPrettyCase(b),
+    undefined,
+    {
+      numeric: true,
+      sensitivity: 'base',
+    }
+  );
+  if (labelComparison !== 0) return labelComparison;
+
+  return a.localeCompare(b, undefined, {
+    numeric: true,
+    sensitivity: 'base',
+  });
+}
+
 /**
  * Resolves effective executor.
  * userSelections.executor → scratch → lastUsedConfig → configDefault → first available
@@ -35,7 +53,10 @@ function useEffectiveExecutor(
   configExecutorProfile: ExecutorProfileId | null | undefined
 ) {
   const options = useMemo(
-    () => Object.keys(profiles ?? {}) as BaseCodingAgent[],
+    () =>
+      (Object.keys(profiles ?? {}) as BaseCodingAgent[]).sort(
+        compareExecutorLabels
+      ),
     [profiles]
   );
 

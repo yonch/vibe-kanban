@@ -128,6 +128,8 @@ struct McpWaitExecutionResponse {
         description = "Final assistant message/summary from the completed execution (if available)"
     )]
     output: Option<String>,
+    #[schemars(description = "Whether the agent accepted the execution before it completed")]
+    accepted_by_agent: bool,
 }
 
 #[tool_router(router = workspaces_tools_router, vis = "pub")]

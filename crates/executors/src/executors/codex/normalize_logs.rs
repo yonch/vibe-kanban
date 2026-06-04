@@ -162,7 +162,7 @@ struct CommandState {
     command: String,
     stdout: BoundedOutput,
     stderr: BoundedOutput,
-    formatted_output: Option<String>,
+    formatted_output: Option<BoundedOutput>,
     pending_output_bytes: usize,
     status: ToolStatus,
     exit_code: Option<i32>,
@@ -184,8 +184,8 @@ impl ToNormalizedEntry for CommandState {
                         exit_status: self
                             .exit_code
                             .map(|code| CommandExitStatus::ExitCode { code }),
-                        output: if self.formatted_output.is_some() {
-                            bounded_output_text(self.formatted_output.as_deref())
+                        output: if let Some(formatted_output) = &self.formatted_output {
+                            formatted_output.display()
                         } else {
                             build_command_output(self.stdout.display(), self.stderr.display())
                         },
@@ -205,8 +205,7 @@ impl ToNormalizedEntry for CommandState {
 
 impl CommandState {
     fn set_formatted_output(&mut self, output: Option<String>) {
-        self.formatted_output =
-            output.and_then(|output| BoundedOutput::from_str(&output).display());
+        self.formatted_output = output.map(|output| BoundedOutput::from_str(&output));
         self.pending_output_bytes = 0;
     }
 
@@ -2632,10 +2631,6 @@ fn handle_model_params(
     upsert_normalized_entry(msg_store, index, entry, is_new);
 }
 
-fn bounded_output_text(output: Option<&str>) -> Option<String> {
-    output.and_then(|output| BoundedOutput::from_str(output).display())
-}
-
 fn build_command_output(stdout: Option<String>, stderr: Option<String>) -> Option<String> {
     let mut sections = Vec::new();
     if let Some(out) = stdout.as_deref() {
@@ -2955,6 +2950,48 @@ mod tests {
         assert!(display.contains("tail-marker"));
         assert!(!display.contains("dropped-prefix"));
         assert!(display.len() <= COMMAND_OUTPUT_TAIL_BYTES + 128);
+    }
+
+    #[test]
+    fn completed_command_output_is_bounded_once() {
+        let mut command_state = CommandState {
+            index: None,
+            command: "rg noisy".to_string(),
+            stdout: BoundedOutput::default(),
+            stderr: BoundedOutput::default(),
+            formatted_output: None,
+            pending_output_bytes: 0,
+            status: ToolStatus::Success,
+            exit_code: Some(0),
+            awaiting_approval: false,
+            call_id: "cmd-large-output".to_string(),
+        };
+        let formatted_output = format!(
+            "dropped-prefix-{}-tail-marker",
+            "a".repeat(COMMAND_OUTPUT_TAIL_BYTES * 2)
+        );
+        let expected_omitted_bytes = formatted_output.len() - COMMAND_OUTPUT_TAIL_BYTES;
+
+        command_state.set_formatted_output(Some(formatted_output));
+        let entry = command_state.to_normalized_entry();
+
+        match &entry.entry_type {
+            NormalizedEntryType::ToolUse {
+                action_type:
+                    ActionType::CommandRun {
+                        result: Some(result),
+                        ..
+                    },
+                ..
+            } => {
+                let output = result.output.as_deref().expect("command output");
+                assert!(output.starts_with(&format!("[{expected_omitted_bytes} bytes omitted;")));
+                assert!(output.contains("tail-marker"));
+                assert!(!output.contains("dropped-prefix"));
+                assert!(output.len() <= COMMAND_OUTPUT_TAIL_BYTES + 128);
+            }
+            other => panic!("unexpected command entry: {other:?}"),
+        }
     }
 
     #[tokio::test]

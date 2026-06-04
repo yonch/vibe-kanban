@@ -23,7 +23,16 @@ use crate::{
 pub(crate) async fn create_workspace_record(
     deployment: &DeploymentImpl,
     name: Option<String>,
+    idempotency_key: Option<String>,
 ) -> Result<Workspace, ApiError> {
+    let idempotency_key = normalize_idempotency_key(idempotency_key);
+    if let Some(key) = idempotency_key.as_deref()
+        && let Some(workspace) =
+            Workspace::find_by_idempotency_key(&deployment.db().pool, key).await?
+    {
+        return Ok(workspace);
+    }
+
     let workspace_id = Uuid::new_v4();
     let branch_label = name
         .as_deref()
@@ -34,24 +43,50 @@ pub(crate) async fn create_workspace_record(
         .git_branch_from_workspace(&workspace_id, branch_label)
         .await;
 
-    let workspace = Workspace::create(
+    let create_result = Workspace::create(
         &deployment.db().pool,
         &CreateWorkspace {
             branch: git_branch_name,
             name: name.filter(|workspace_name| !workspace_name.is_empty()),
+            idempotency_key: idempotency_key.clone(),
         },
         workspace_id,
     )
-    .await?;
+    .await;
+
+    let workspace = match create_result {
+        Ok(workspace) => workspace,
+        Err(err) => {
+            if let Some(key) = idempotency_key.as_deref()
+                && let Some(workspace) =
+                    Workspace::find_by_idempotency_key(&deployment.db().pool, key).await?
+            {
+                return Ok(workspace);
+            }
+            return Err(err.into());
+        }
+    };
 
     Ok(workspace)
+}
+
+fn normalize_idempotency_key(key: Option<String>) -> Option<String> {
+    key.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 pub async fn create_workspace(
     State(deployment): State<DeploymentImpl>,
     Json(payload): Json<CreateWorkspaceApiRequest>,
 ) -> Result<ResponseJson<ApiResponse<Workspace>>, ApiError> {
-    let workspace = create_workspace_record(&deployment, payload.name).await?;
+    let workspace =
+        create_workspace_record(&deployment, payload.name, payload.idempotency_key).await?;
 
     deployment
         .track_if_analytics_allowed(
@@ -236,7 +271,7 @@ pub async fn create_and_start_workspace(
 
     let mut managed_workspace = deployment
         .workspace_manager()
-        .load_managed_workspace(create_workspace_record(&deployment, name).await?)
+        .load_managed_workspace(create_workspace_record(&deployment, name, None).await?)
         .await?;
 
     for repo in &repos {

@@ -60,6 +60,17 @@ use worktree_manager::WorktreeError;
 use crate::services::{execution_process, notification::NotificationService};
 pub type ContainerRef = String;
 
+fn normalize_idempotency_key(key: Option<String>) -> Option<String> {
+    key.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
+}
+
 #[derive(Debug, Error)]
 pub enum ContainerError {
     #[error(transparent)]
@@ -505,6 +516,7 @@ pub trait ContainerService {
                     &CreateSession {
                         executor: None,
                         name: None,
+                        idempotency_key: None,
                     },
                     Uuid::new_v4(),
                     workspace.id,
@@ -1065,6 +1077,7 @@ pub trait ContainerService {
             &CreateSession {
                 executor: Some(executor_config.executor.to_string()),
                 name: None,
+                idempotency_key: None,
             },
             Uuid::new_v4(),
             workspace.id,
@@ -1137,6 +1150,36 @@ pub trait ContainerService {
         executor_action: &ExecutorAction,
         run_reason: &ExecutionProcessRunReason,
     ) -> Result<ExecutionProcess, ContainerError> {
+        self.start_execution_with_idempotency_key(
+            workspace,
+            session,
+            executor_action,
+            run_reason,
+            None,
+        )
+        .await
+    }
+
+    async fn start_execution_with_idempotency_key(
+        &self,
+        workspace: &Workspace,
+        session: &Session,
+        executor_action: &ExecutorAction,
+        run_reason: &ExecutionProcessRunReason,
+        idempotency_key: Option<String>,
+    ) -> Result<ExecutionProcess, ContainerError> {
+        let idempotency_key = normalize_idempotency_key(idempotency_key);
+        if let Some(key) = idempotency_key.as_deref()
+            && let Some(existing) = ExecutionProcess::find_by_session_and_idempotency_key(
+                &self.db().pool,
+                session.id,
+                key,
+            )
+            .await?
+        {
+            return Ok(existing);
+        }
+
         // Create new execution process record
         // Capture current HEAD per repository as the "before" commit for this execution
         let repositories =
@@ -1168,15 +1211,32 @@ pub trait ContainerService {
             session_id: session.id,
             executor_action: executor_action.clone(),
             run_reason: run_reason.clone(),
+            idempotency_key: idempotency_key.clone(),
         };
 
-        let execution_process = ExecutionProcess::create(
+        let execution_process = match ExecutionProcess::create(
             &self.db().pool,
             &create_execution_process,
             Uuid::new_v4(),
             &repo_states,
         )
-        .await?;
+        .await
+        {
+            Ok(execution_process) => execution_process,
+            Err(err) => {
+                if let Some(key) = idempotency_key.as_deref()
+                    && let Some(existing) = ExecutionProcess::find_by_session_and_idempotency_key(
+                        &self.db().pool,
+                        session.id,
+                        key,
+                    )
+                    .await?
+                {
+                    return Ok(existing);
+                }
+                return Err(err.into());
+            }
+        };
         self.msg_stores()
             .write()
             .await

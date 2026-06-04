@@ -321,6 +321,7 @@ pub struct WaitForExecutionsResponse {
     pub status: String,
     pub completed_at: Option<DateTime<Utc>>,
     pub output: Option<String>,
+    pub accepted_by_agent: bool,
 }
 
 /// Long-poll endpoint: holds the connection open until any of the requested executions
@@ -354,9 +355,11 @@ async fn wait_for_executions(
                     ExecutionProcessStatus::Running => unreachable!(),
                 };
 
-                let output = CodingAgentTurn::find_by_execution_process_id(pool, ep.id)
-                    .await?
-                    .and_then(|turn| turn.summary);
+                let turn = CodingAgentTurn::find_by_execution_process_id(pool, ep.id).await?;
+                let output = turn.as_ref().and_then(|turn| turn.summary.clone());
+                let accepted_by_agent = turn
+                    .as_ref()
+                    .is_some_and(|turn| turn.agent_session_id.is_some());
 
                 return Ok(ResponseJson(ApiResponse::success(
                     WaitForExecutionsResponse {
@@ -365,6 +368,7 @@ async fn wait_for_executions(
                         status: status.to_string(),
                         completed_at: ep.completed_at,
                         output,
+                        accepted_by_agent,
                     },
                 )));
             }
@@ -372,10 +376,17 @@ async fn wait_for_executions(
 
         if tokio::time::Instant::now() + poll_interval > deadline {
             let first_id = request.execution_ids[0];
-            let session_id = ExecutionProcess::find_by_id(pool, first_id)
-                .await?
+            let first_execution = ExecutionProcess::find_by_id(pool, first_id).await?;
+            let session_id = first_execution
+                .as_ref()
                 .map(|ep| ep.session_id)
                 .unwrap_or(first_id);
+            let accepted_by_agent = match first_execution {
+                Some(ep) => CodingAgentTurn::find_by_execution_process_id(pool, ep.id)
+                    .await?
+                    .is_some_and(|turn| turn.agent_session_id.is_some()),
+                None => false,
+            };
 
             return Ok(ResponseJson(ApiResponse::success(
                 WaitForExecutionsResponse {
@@ -384,6 +395,7 @@ async fn wait_for_executions(
                     status: "timeout".to_string(),
                     completed_at: None,
                     output: None,
+                    accepted_by_agent,
                 },
             )));
         }

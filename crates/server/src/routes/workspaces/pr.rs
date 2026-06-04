@@ -123,6 +123,7 @@ async fn trigger_pr_description_follow_up(
                     &CreateSession {
                         executor: None,
                         name: None,
+                        idempotency_key: None,
                     },
                     Uuid::new_v4(),
                     workspace.id,
@@ -719,6 +720,7 @@ pub async fn create_workspace_from_pr(
         &CreateWorkspace {
             branch: target_branch_ref.clone(),
             name: Some(payload.pr_title.clone()),
+            idempotency_key: None,
         },
         workspace_id,
     )
@@ -796,6 +798,7 @@ pub async fn create_workspace_from_pr(
                 &CreateSession {
                     executor: None,
                     name: None,
+                    idempotency_key: None,
                 },
                 Uuid::new_v4(),
                 workspace.id,

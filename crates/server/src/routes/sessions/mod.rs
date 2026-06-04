@@ -45,6 +45,7 @@ pub struct CreateSessionRequest {
     pub workspace_id: Uuid,
     pub executor: Option<String>,
     pub name: Option<String>,
+    pub idempotency_key: Option<String>,
 }
 
 pub async fn get_sessions(
@@ -75,18 +76,52 @@ pub async fn create_session(
             "Workspace not found".to_string(),
         )))?;
 
-    let session = Session::create(
+    let idempotency_key = normalize_idempotency_key(payload.idempotency_key);
+    if let Some(key) = idempotency_key.as_deref()
+        && let Some(session) =
+            Session::find_by_workspace_and_idempotency_key(pool, payload.workspace_id, key).await?
+    {
+        return Ok(ResponseJson(ApiResponse::success(session)));
+    }
+
+    let create_result = Session::create(
         pool,
         &CreateSession {
             executor: payload.executor,
             name: payload.name,
+            idempotency_key: idempotency_key.clone(),
         },
         Uuid::new_v4(),
         payload.workspace_id,
     )
-    .await?;
+    .await;
+
+    let session = match create_result {
+        Ok(session) => session,
+        Err(err) => {
+            if let Some(key) = idempotency_key.as_deref()
+                && let Some(session) =
+                    Session::find_by_workspace_and_idempotency_key(pool, payload.workspace_id, key)
+                        .await?
+            {
+                return Ok(ResponseJson(ApiResponse::success(session)));
+            }
+            return Err(err.into());
+        }
+    };
 
     Ok(ResponseJson(ApiResponse::success(session)))
+}
+
+fn normalize_idempotency_key(key: Option<String>) -> Option<String> {
+    key.and_then(|value| {
+        let trimmed = value.trim();
+        if trimmed.is_empty() {
+            None
+        } else {
+            Some(trimmed.to_string())
+        }
+    })
 }
 
 pub async fn update_session(
@@ -112,6 +147,7 @@ pub struct CreateFollowUpAttempt {
     pub retry_process_id: Option<Uuid>,
     pub force_when_dirty: Option<bool>,
     pub perform_git_reset: Option<bool>,
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -127,6 +163,13 @@ pub async fn follow_up(
     Json(payload): Json<CreateFollowUpAttempt>,
 ) -> Result<ResponseJson<ApiResponse<ExecutionProcess>>, ApiError> {
     let pool = &deployment.db().pool;
+    let idempotency_key = normalize_idempotency_key(payload.idempotency_key.clone());
+    if let Some(key) = idempotency_key.as_deref()
+        && let Some(execution_process) =
+            ExecutionProcess::find_by_session_and_idempotency_key(pool, session.id, key).await?
+    {
+        return Ok(ResponseJson(ApiResponse::success(execution_process)));
+    }
 
     // Load workspace from session
     let workspace = Workspace::find_by_id(pool, session.workspace_id)
@@ -211,11 +254,12 @@ pub async fn follow_up(
 
     let execution_process = deployment
         .container()
-        .start_execution(
+        .start_execution_with_idempotency_key(
             &workspace,
             &session,
             &action,
             &ExecutionProcessRunReason::CodingAgent,
+            idempotency_key,
         )
         .await?;
 

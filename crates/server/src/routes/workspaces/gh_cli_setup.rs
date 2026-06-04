@@ -49,6 +49,7 @@ pub async fn run_gh_cli_setup(
                     &CreateSession {
                         executor: Some("gh-cli".to_string()),
                         name: None,
+                        idempotency_key: None,
                     },
                     Uuid::new_v4(),
                     workspace.id,

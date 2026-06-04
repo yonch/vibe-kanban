@@ -20,6 +20,7 @@ pub struct WorkspaceRepoInput {
 #[derive(Debug, Serialize, Deserialize, TS)]
 pub struct CreateWorkspaceApiRequest {
     pub name: Option<String>,
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]

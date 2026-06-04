@@ -42,6 +42,9 @@ ARG VK_SHARED_API_BASE=""
 ENV CARGO_REGISTRIES_CRATES_IO_PROTOCOL=sparse
 ENV CARGO_NET_GIT_FETCH_WITH_CLI=true
 ENV CARGO_TARGET_DIR=/app/target
+# Keep symbols in the container binary so allocator profiles from deployed
+# containers can be symbolized. This does not change optimized code generation.
+ENV CARGO_PROFILE_RELEASE_STRIP=false
 ENV POSTHOG_API_KEY=${POSTHOG_API_KEY}
 ENV POSTHOG_API_ENDPOINT=${POSTHOG_API_ENDPOINT}
 ENV SENTRY_DSN=${SENTRY_DSN}

@@ -60,6 +60,7 @@ use crate::{
 };
 
 const COMMAND_OUTPUT_TAIL_BYTES: usize = 256 * 1024;
+const COMMAND_OUTPUT_TRUNCATE_THRESHOLD_BYTES: usize = COMMAND_OUTPUT_TAIL_BYTES * 2;
 const COMMAND_OUTPUT_UPDATE_BYTES: usize = 32 * 1024;
 
 trait ToNormalizedEntry {
@@ -90,9 +91,11 @@ struct BoundedOutput {
 
 impl BoundedOutput {
     fn from_str(s: &str) -> Self {
-        let mut output = Self::default();
-        output.push_str(s);
-        output
+        let keep_from = tail_keep_from(s, COMMAND_OUTPUT_TAIL_BYTES);
+        Self {
+            tail: s[keep_from..].to_string(),
+            omitted_bytes: keep_from,
+        }
     }
 
     fn push_str(&mut self, chunk: &str) {
@@ -110,35 +113,47 @@ impl BoundedOutput {
     }
 
     fn truncate_to_tail(&mut self) {
-        if self.tail.len() <= COMMAND_OUTPUT_TAIL_BYTES {
+        if self.tail.len() <= COMMAND_OUTPUT_TRUNCATE_THRESHOLD_BYTES {
             return;
         }
 
-        let mut keep_from = self.tail.len() - COMMAND_OUTPUT_TAIL_BYTES;
-        while keep_from < self.tail.len() && !self.tail.is_char_boundary(keep_from) {
-            keep_from += 1;
-        }
-
+        let keep_from = tail_keep_from(&self.tail, COMMAND_OUTPUT_TAIL_BYTES);
         self.omitted_bytes += keep_from;
         self.tail.drain(..keep_from);
     }
 
     fn display(&self) -> Option<String> {
-        if self.tail.trim().is_empty() && self.omitted_bytes == 0 {
+        let keep_from = tail_keep_from(&self.tail, COMMAND_OUTPUT_TAIL_BYTES);
+        let omitted_bytes = self.omitted_bytes + keep_from;
+        let tail = &self.tail[keep_from..];
+
+        if tail.trim().is_empty() && omitted_bytes == 0 {
             return None;
         }
 
-        if self.omitted_bytes == 0 {
-            Some(self.tail.clone())
+        if omitted_bytes == 0 {
+            Some(tail.to_string())
         } else {
             Some(format!(
                 "[{} bytes omitted; showing last {} bytes]\n{}",
-                self.omitted_bytes,
-                self.tail.len(),
-                self.tail
+                omitted_bytes,
+                tail.len(),
+                tail
             ))
         }
     }
+}
+
+fn tail_keep_from(s: &str, max_tail_bytes: usize) -> usize {
+    if s.len() <= max_tail_bytes {
+        return 0;
+    }
+
+    let mut keep_from = s.len() - max_tail_bytes;
+    while keep_from < s.len() && !s.is_char_boundary(keep_from) {
+        keep_from += 1;
+    }
+    keep_from
 }
 
 #[derive(Default)]
@@ -2890,6 +2905,56 @@ mod tests {
             }
         })
         .to_string()
+    }
+
+    #[test]
+    fn bounded_output_amortizes_streaming_truncation() {
+        let mut output = BoundedOutput::default();
+
+        output.push_str(&format!(
+            "dropped-prefix-{}",
+            "a".repeat(COMMAND_OUTPUT_TAIL_BYTES)
+        ));
+        output.push_str("-tail-marker");
+
+        assert!(output.tail.len() > COMMAND_OUTPUT_TAIL_BYTES);
+        assert_eq!(output.omitted_bytes, 0);
+
+        let display = output.display().expect("display output");
+        assert!(display.contains("bytes omitted"));
+        assert!(display.contains("tail-marker"));
+        assert!(!display.contains("dropped-prefix"));
+        assert!(display.len() <= COMMAND_OUTPUT_TAIL_BYTES + 128);
+
+        output.push_str(&"b".repeat(COMMAND_OUTPUT_TAIL_BYTES));
+
+        assert!(output.tail.len() <= COMMAND_OUTPUT_TAIL_BYTES);
+        assert!(output.omitted_bytes > COMMAND_OUTPUT_TAIL_BYTES);
+        assert!(
+            output
+                .display()
+                .expect("display output")
+                .ends_with(&"b".repeat(COMMAND_OUTPUT_TAIL_BYTES))
+        );
+    }
+
+    #[test]
+    fn bounded_output_from_str_keeps_only_tail_suffix() {
+        let input = format!(
+            "dropped-prefix-{}-tail-marker",
+            "a".repeat(COMMAND_OUTPUT_TAIL_BYTES * 2)
+        );
+
+        let output = BoundedOutput::from_str(&input);
+
+        assert!(output.tail.len() <= COMMAND_OUTPUT_TAIL_BYTES);
+        assert_eq!(output.omitted_bytes + output.tail.len(), input.len());
+
+        let display = output.display().expect("display output");
+        assert!(display.contains("bytes omitted"));
+        assert!(display.contains("tail-marker"));
+        assert!(!display.contains("dropped-prefix"));
+        assert!(display.len() <= COMMAND_OUTPUT_TAIL_BYTES + 128);
     }
 
     #[tokio::test]

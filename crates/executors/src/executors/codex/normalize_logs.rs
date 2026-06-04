@@ -162,7 +162,7 @@ struct CommandState {
     command: String,
     stdout: BoundedOutput,
     stderr: BoundedOutput,
-    formatted_output: Option<BoundedOutput>,
+    formatted_output: Option<String>,
     pending_output_bytes: usize,
     status: ToolStatus,
     exit_code: Option<i32>,
@@ -185,7 +185,7 @@ impl ToNormalizedEntry for CommandState {
                             .exit_code
                             .map(|code| CommandExitStatus::ExitCode { code }),
                         output: if let Some(formatted_output) = &self.formatted_output {
-                            formatted_output.display()
+                            Some(formatted_output.clone())
                         } else {
                             build_command_output(self.stdout.display(), self.stderr.display())
                         },
@@ -205,7 +205,11 @@ impl ToNormalizedEntry for CommandState {
 
 impl CommandState {
     fn set_formatted_output(&mut self, output: Option<String>) {
-        self.formatted_output = output.map(|output| BoundedOutput::from_str(&output));
+        self.formatted_output = output.map(|output| {
+            BoundedOutput::from_str(&output)
+                .display()
+                .unwrap_or_default()
+        });
         self.pending_output_bytes = 0;
     }
 
@@ -2989,6 +2993,39 @@ mod tests {
                 assert!(output.contains("tail-marker"));
                 assert!(!output.contains("dropped-prefix"));
                 assert!(output.len() <= COMMAND_OUTPUT_TAIL_BYTES + 128);
+            }
+            other => panic!("unexpected command entry: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn completed_command_preserves_explicit_empty_formatted_output() {
+        let mut command_state = CommandState {
+            index: None,
+            command: "printf hidden".to_string(),
+            stdout: BoundedOutput::from_str("stdout should not be used"),
+            stderr: BoundedOutput::default(),
+            formatted_output: None,
+            pending_output_bytes: 0,
+            status: ToolStatus::Success,
+            exit_code: Some(0),
+            awaiting_approval: false,
+            call_id: "cmd-empty-output".to_string(),
+        };
+
+        command_state.set_formatted_output(Some(String::new()));
+        let entry = command_state.to_normalized_entry();
+
+        match &entry.entry_type {
+            NormalizedEntryType::ToolUse {
+                action_type:
+                    ActionType::CommandRun {
+                        result: Some(result),
+                        ..
+                    },
+                ..
+            } => {
+                assert_eq!(result.output.as_deref(), Some(""));
             }
             other => panic!("unexpected command entry: {other:?}"),
         }

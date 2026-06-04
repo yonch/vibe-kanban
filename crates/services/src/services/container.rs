@@ -71,6 +71,10 @@ fn normalize_idempotency_key(key: Option<String>) -> Option<String> {
     })
 }
 
+fn is_unique_violation(err: &SqlxError) -> bool {
+    matches!(err, SqlxError::Database(db_err) if db_err.is_unique_violation())
+}
+
 #[derive(Debug, Error)]
 pub enum ContainerError {
     #[error(transparent)]
@@ -1224,7 +1228,8 @@ pub trait ContainerService {
         {
             Ok(execution_process) => execution_process,
             Err(err) => {
-                if let Some(key) = idempotency_key.as_deref()
+                if is_unique_violation(&err)
+                    && let Some(key) = idempotency_key.as_deref()
                     && let Some(existing) = ExecutionProcess::find_by_session_and_idempotency_key(
                         &self.db().pool,
                         session.id,

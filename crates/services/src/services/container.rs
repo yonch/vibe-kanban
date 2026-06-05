@@ -1066,8 +1066,9 @@ pub trait ContainerService {
             .as_deref()
             .map(|key| format!("{key}:execution"));
 
-        // Create container
-        self.create(workspace).await?;
+        // Replays should repair missing filesystem/container state before
+        // returning an existing session or execution row.
+        self.ensure_container_exists(workspace).await?;
 
         let repos = WorkspaceRepo::find_repos_for_workspace(&self.db().pool, workspace.id).await?;
 

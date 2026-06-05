@@ -264,6 +264,14 @@ pub async fn create_and_start_workspace(
         ));
     }
 
+    let is_idempotent_replay = if let Some(key) = idempotency_key.as_deref() {
+        Workspace::find_by_idempotency_key(&deployment.db().pool, key)
+            .await?
+            .is_some()
+    } else {
+        false
+    };
+
     let mut managed_workspace = deployment
         .workspace_manager()
         .load_managed_workspace(
@@ -296,6 +304,14 @@ pub async fn create_and_start_workspace(
     }
 
     for repo in &repos {
+        if is_idempotent_replay
+            && managed_workspace.repos.iter().any(|attached| {
+                attached.repo.id == repo.repo_id && attached.target_branch == repo.target_branch
+            })
+        {
+            continue;
+        }
+
         managed_workspace
             .add_repository(repo, deployment.git())
             .await

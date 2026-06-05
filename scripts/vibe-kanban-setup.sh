@@ -23,8 +23,6 @@ else
   ln -s "$VK_SHARED_BUILD_DIR" "$VK_REPO_BUILD_DIR"
 fi
 
-scripts/vibe-kanban-cleanup.sh
-
 # Install Node deps so prettier/tsc/eslint are available for `pnpm run format`,
 # `pnpm run check`, and the pre-commit hook's `format:check` step.
 pnpm install

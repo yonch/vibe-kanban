@@ -13,9 +13,13 @@ import { useFileInViewStore } from '@/shared/stores/useFileInViewStore';
 
 interface ChangesViewProviderProps {
   children: React.ReactNode;
+  workspaceId?: string;
 }
 
-export function ChangesViewProvider({ children }: ChangesViewProviderProps) {
+export function ChangesViewProvider({
+  children,
+  workspaceId,
+}: ChangesViewProviderProps) {
   const diffPaths = useDiffPaths();
   const [selectedFilePath, setSelectedFilePath] = useState<string | null>(null);
   const [selectedLineNumber, setSelectedLineNumber] = useState<number | null>(
@@ -26,12 +30,23 @@ export function ChangesViewProvider({ children }: ChangesViewProviderProps) {
   );
 
   const scrollToFileCallbackRef = useRef<ScrollToFileCallback | null>(null);
+  const pendingScrollRef = useRef<{
+    path: string;
+    lineNumber?: number;
+  } | null>(null);
   const diffPathsRef = useRef(diffPaths);
   diffPathsRef.current = diffPaths;
 
   const registerScrollToFile = useCallback(
     (callback: ScrollToFileCallback | null) => {
       scrollToFileCallbackRef.current = callback;
+      if (callback && pendingScrollRef.current) {
+        const pendingScroll = pendingScrollRef.current;
+        pendingScrollRef.current = null;
+        requestAnimationFrame(() => {
+          callback(pendingScroll.path, pendingScroll.lineNumber);
+        });
+      }
     },
     []
   );
@@ -59,10 +74,17 @@ export function ChangesViewProvider({ children }: ChangesViewProviderProps) {
 
   const viewFileInChanges = useCallback(
     (filePath: string) => {
-      setRightMainPanelMode(RIGHT_MAIN_PANEL_MODES.CHANGES);
+      setRightMainPanelMode(RIGHT_MAIN_PANEL_MODES.CHANGES, workspaceId);
       setSelectedFilePath(filePath);
+      useFileInViewStore.getState().setFileInView(filePath);
+
+      if (scrollToFileCallbackRef.current) {
+        scrollToFileCallbackRef.current(filePath);
+      } else {
+        pendingScrollRef.current = { path: filePath };
+      }
     },
-    [setRightMainPanelMode]
+    [setRightMainPanelMode, workspaceId]
   );
 
   const findMatchingDiffPath = useCallback((text: string): string | null => {

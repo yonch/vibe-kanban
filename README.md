@@ -112,10 +112,10 @@ script to run:
 scripts/vibe-kanban-setup.sh
 ```
 
-Configure the repository cleanup script to run:
+Configure the repository archive script to run:
 
 ```bash
-scripts/vibe-kanban-cleanup.sh
+scripts/vibe-kanban-archive.sh
 ```
 
 The setup script enables the pre-commit hook, installs Node dependencies, and
@@ -123,7 +123,7 @@ links Cargo's repo-local `target/build-dir` to
 `${CARGO_HOME:-$HOME/.cargo}/build-dir/vibe-kanban` so Rust build artifacts can
 be reused across Vibe Kanban worktrees on the same machine. Without that setup
 script, Cargo falls back to the checked-in `target/build-dir` path inside the
-repo. The cleanup script prunes stale build artifacts older than seven days and
+repo. The archive script prunes stale build artifacts older than seven days and
 removes empty directories.
 
 ### Running the dev server

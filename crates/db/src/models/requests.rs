@@ -37,6 +37,7 @@ pub struct CreateAndStartWorkspaceRequest {
     pub executor_config: ExecutorConfig,
     pub prompt: String,
     pub attachment_ids: Option<Vec<Uuid>>,
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]

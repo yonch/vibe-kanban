@@ -10,7 +10,8 @@ use axum::{
 };
 use db::models::{
     coding_agent_turn::CodingAgentTurn,
-    execution_process::{ExecutionProcess, ExecutionProcessRunReason},
+    execution_process::{ExecutionProcess, ExecutionProcessRunReason, ExecutionProcessStatus},
+    idempotency::{is_unique_violation, normalize_idempotency_key},
     requests::UpdateSession,
     scratch::{Scratch, ScratchType},
     session::{CreateSession, Session, SessionError},
@@ -25,7 +26,7 @@ use executors::{
     profile::ExecutorConfig,
 };
 use serde::Deserialize;
-use services::services::container::ContainerService;
+use services::services::container::{ContainerService, ExecutionClaim};
 use ts_rs::TS;
 use utils::response::ApiResponse;
 use uuid::Uuid;
@@ -99,7 +100,8 @@ pub async fn create_session(
     let session = match create_result {
         Ok(session) => session,
         Err(err) => {
-            if let Some(key) = idempotency_key.as_deref()
+            if matches!(&err, SessionError::Database(db_err) if is_unique_violation(db_err))
+                && let Some(key) = idempotency_key.as_deref()
                 && let Some(session) =
                     Session::find_by_workspace_and_idempotency_key(pool, payload.workspace_id, key)
                         .await?
@@ -111,17 +113,6 @@ pub async fn create_session(
     };
 
     Ok(ResponseJson(ApiResponse::success(session)))
-}
-
-fn normalize_idempotency_key(key: Option<String>) -> Option<String> {
-    key.and_then(|value| {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
 }
 
 pub async fn update_session(
@@ -209,18 +200,9 @@ pub async fn follow_up(
             .await?;
     }
 
-    if let Some(proc_id) = payload.retry_process_id {
-        let force_when_dirty = payload.force_when_dirty.unwrap_or(false);
-        let perform_git_reset = payload.perform_git_reset.unwrap_or(true);
-        deployment
-            .container()
-            .reset_session_to_process(session.id, proc_id, perform_git_reset, force_when_dirty)
-            .await?;
-    }
-
     let latest_session_info = CodingAgentTurn::find_latest_session_info(pool, session.id).await?;
 
-    let prompt = payload.prompt;
+    let prompt = payload.prompt.clone();
 
     let repos = WorkspaceRepo::find_repos_for_workspace(pool, workspace.id).await?;
     let cleanup_action = deployment.container().cleanup_actions_for_repos(&repos);
@@ -243,7 +225,7 @@ pub async fn follow_up(
     } else {
         ExecutorActionType::CodingAgentInitialRequest(
             executors::actions::coding_agent_initial::CodingAgentInitialRequest {
-                prompt,
+                prompt: payload.prompt,
                 executor_config: payload.executor_config.clone(),
                 working_dir,
             },
@@ -252,9 +234,9 @@ pub async fn follow_up(
 
     let action = ExecutorAction::new(action_type, cleanup_action.map(Box::new));
 
-    let execution_process = deployment
+    let claim = deployment
         .container()
-        .start_execution_with_idempotency_key(
+        .claim_execution_with_idempotency_key(
             &workspace,
             &session,
             &action,
@@ -262,6 +244,53 @@ pub async fn follow_up(
             idempotency_key,
         )
         .await?;
+
+    let execution_process = match claim {
+        ExecutionClaim::Existing(execution_process) => execution_process,
+        ExecutionClaim::Created(execution_process) => {
+            if let Some(proc_id) = payload.retry_process_id {
+                let force_when_dirty = payload.force_when_dirty.unwrap_or(false);
+                let perform_git_reset = payload.perform_git_reset.unwrap_or(true);
+                if let Err(err) = deployment
+                    .container()
+                    .reset_session_to_process(
+                        session.id,
+                        proc_id,
+                        perform_git_reset,
+                        force_when_dirty,
+                    )
+                    .await
+                {
+                    deployment
+                        .container()
+                        .msg_stores()
+                        .write()
+                        .await
+                        .remove(&execution_process.id);
+                    if let Err(update_error) = ExecutionProcess::update_completion(
+                        pool,
+                        execution_process.id,
+                        ExecutionProcessStatus::Failed,
+                        None,
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            "Failed to mark execution process {} as failed after reset error: {}",
+                            execution_process.id,
+                            update_error
+                        );
+                    }
+                    return Err(err.into());
+                }
+            }
+
+            deployment
+                .container()
+                .finish_claimed_execution(&workspace, &session, &action, execution_process)
+                .await?
+        }
+    };
 
     // Clear the draft follow-up scratch on successful spawn
     // This ensures the scratch is wiped even if the user navigates away quickly
@@ -376,16 +405,4 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
 }
 
 #[cfg(test)]
-mod tests {
-    use super::normalize_idempotency_key;
-
-    #[test]
-    fn normalize_idempotency_key_trims_and_drops_blank_values() {
-        assert_eq!(
-            normalize_idempotency_key(Some(" key ".to_string())),
-            Some("key".to_string())
-        );
-        assert_eq!(normalize_idempotency_key(Some(" \t\n ".to_string())), None);
-        assert_eq!(normalize_idempotency_key(None), None);
-    }
-}
+mod tests {}

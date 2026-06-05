@@ -2,10 +2,13 @@ use std::collections::HashMap;
 
 use axum::{Json, extract::State, response::Json as ResponseJson};
 use db::models::{
+    execution_process::ExecutionProcess,
+    idempotency::{is_unique_violation, normalize_idempotency_key},
     requests::{
         CreateAndStartWorkspaceRequest, CreateAndStartWorkspaceResponse, CreateWorkspaceApiRequest,
     },
-    workspace::{CreateWorkspace, Workspace},
+    session::Session,
+    workspace::{CreateWorkspace, Workspace, WorkspaceError},
 };
 use deployment::Deployment;
 use services::services::container::ContainerService;
@@ -57,7 +60,8 @@ pub(crate) async fn create_workspace_record(
     let workspace = match create_result {
         Ok(workspace) => workspace,
         Err(err) => {
-            if let Some(key) = idempotency_key.as_deref()
+            if matches!(&err, WorkspaceError::Database(db_err) if is_unique_violation(db_err))
+                && let Some(key) = idempotency_key.as_deref()
                 && let Some(workspace) =
                     Workspace::find_by_idempotency_key(&deployment.db().pool, key).await?
             {
@@ -68,17 +72,6 @@ pub(crate) async fn create_workspace_record(
     };
 
     Ok(workspace)
-}
-
-fn normalize_idempotency_key(key: Option<String>) -> Option<String> {
-    key.and_then(|value| {
-        let trimmed = value.trim();
-        if trimmed.is_empty() {
-            None
-        } else {
-            Some(trimmed.to_string())
-        }
-    })
 }
 
 pub async fn create_workspace(
@@ -255,7 +248,9 @@ pub async fn create_and_start_workspace(
         executor_config,
         prompt,
         attachment_ids,
+        idempotency_key,
     } = payload;
+    let idempotency_key = normalize_idempotency_key(idempotency_key);
 
     let mut workspace_prompt = normalize_prompt(&prompt).ok_or_else(|| {
         ApiError::BadRequest(
@@ -271,8 +266,34 @@ pub async fn create_and_start_workspace(
 
     let mut managed_workspace = deployment
         .workspace_manager()
-        .load_managed_workspace(create_workspace_record(&deployment, name, None).await?)
+        .load_managed_workspace(
+            create_workspace_record(&deployment, name, idempotency_key.clone()).await?,
+        )
         .await?;
+    if let Some(key) = idempotency_key.as_deref() {
+        let session_key = format!("{key}:session");
+        let execution_key = format!("{key}:execution");
+        if let Some(session) = Session::find_by_workspace_and_idempotency_key(
+            &deployment.db().pool,
+            managed_workspace.workspace.id,
+            &session_key,
+        )
+        .await?
+            && let Some(execution_process) = ExecutionProcess::find_by_session_and_idempotency_key(
+                &deployment.db().pool,
+                session.id,
+                &execution_key,
+            )
+            .await?
+        {
+            return Ok(ResponseJson(ApiResponse::success(
+                CreateAndStartWorkspaceResponse {
+                    workspace: managed_workspace.workspace,
+                    execution_process,
+                },
+            )));
+        }
+    }
 
     for repo in &repos {
         managed_workspace
@@ -332,7 +353,12 @@ pub async fn create_and_start_workspace(
 
     let execution_process = deployment
         .container()
-        .start_workspace(&workspace, executor_config.clone(), workspace_prompt)
+        .start_workspace(
+            &workspace,
+            executor_config.clone(),
+            workspace_prompt,
+            idempotency_key,
+        )
         .await?;
 
     deployment
@@ -360,20 +386,7 @@ mod tests {
     use db::models::file::File;
     use uuid::Uuid;
 
-    use super::{
-        ImportedIssueAttachment, normalize_idempotency_key,
-        rewrite_imported_issue_attachments_markdown,
-    };
-
-    #[test]
-    fn normalize_idempotency_key_trims_and_drops_blank_values() {
-        assert_eq!(
-            normalize_idempotency_key(Some(" key ".to_string())),
-            Some("key".to_string())
-        );
-        assert_eq!(normalize_idempotency_key(Some(" \t\n ".to_string())), None);
-        assert_eq!(normalize_idempotency_key(None), None);
-    }
+    use super::{ImportedIssueAttachment, rewrite_imported_issue_attachments_markdown};
 
     fn imported_file(
         attachment_id: Uuid,

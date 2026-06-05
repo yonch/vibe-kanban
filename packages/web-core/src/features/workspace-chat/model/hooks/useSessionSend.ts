@@ -91,6 +91,7 @@ export function useSessionSend({
             retry_process_id: null,
             force_when_dirty: null,
             perform_git_reset: null,
+            idempotency_key: null,
           });
           return true;
         } catch (e: unknown) {

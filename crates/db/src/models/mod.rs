@@ -14,3 +14,6 @@ pub mod tag;
 pub mod task;
 pub mod workspace;
 pub mod workspace_repo;
+
+#[cfg(test)]
+mod idempotency_tests;

@@ -374,3 +374,18 @@ pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
 
     Router::new().nest("/sessions", sessions_router)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::normalize_idempotency_key;
+
+    #[test]
+    fn normalize_idempotency_key_trims_and_drops_blank_values() {
+        assert_eq!(
+            normalize_idempotency_key(Some(" key ".to_string())),
+            Some("key".to_string())
+        );
+        assert_eq!(normalize_idempotency_key(Some(" \t\n ".to_string())), None);
+        assert_eq!(normalize_idempotency_key(None), None);
+    }
+}

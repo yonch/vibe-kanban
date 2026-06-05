@@ -324,6 +324,10 @@ pub struct WaitForExecutionsResponse {
     pub accepted_by_agent: bool,
 }
 
+fn coding_agent_turn_accepted_by_agent(turn: Option<&CodingAgentTurn>) -> bool {
+    turn.is_some_and(|turn| turn.agent_session_id.is_some())
+}
+
 /// Long-poll endpoint: holds the connection open until any of the requested executions
 /// reaches a terminal state (not running) or the timeout elapses.
 async fn wait_for_executions(
@@ -357,9 +361,7 @@ async fn wait_for_executions(
 
                 let turn = CodingAgentTurn::find_by_execution_process_id(pool, ep.id).await?;
                 let output = turn.as_ref().and_then(|turn| turn.summary.clone());
-                let accepted_by_agent = turn
-                    .as_ref()
-                    .is_some_and(|turn| turn.agent_session_id.is_some());
+                let accepted_by_agent = coding_agent_turn_accepted_by_agent(turn.as_ref());
 
                 return Ok(ResponseJson(ApiResponse::success(
                     WaitForExecutionsResponse {
@@ -382,9 +384,10 @@ async fn wait_for_executions(
                 .map(|ep| ep.session_id)
                 .unwrap_or(first_id);
             let accepted_by_agent = match first_execution {
-                Some(ep) => CodingAgentTurn::find_by_execution_process_id(pool, ep.id)
-                    .await?
-                    .is_some_and(|turn| turn.agent_session_id.is_some()),
+                Some(ep) => {
+                    let turn = CodingAgentTurn::find_by_execution_process_id(pool, ep.id).await?;
+                    coding_agent_turn_accepted_by_agent(turn.as_ref())
+                }
                 None => false,
             };
 
@@ -426,4 +429,37 @@ pub(super) fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
         .nest("/{id}", workspace_id_router);
 
     Router::new().nest("/execution-processes", workspaces_router)
+}
+
+#[cfg(test)]
+mod tests {
+    use chrono::Utc;
+    use db::models::coding_agent_turn::CodingAgentTurn;
+    use uuid::Uuid;
+
+    use super::coding_agent_turn_accepted_by_agent;
+
+    fn turn(agent_session_id: Option<&str>) -> CodingAgentTurn {
+        CodingAgentTurn {
+            id: Uuid::new_v4(),
+            execution_process_id: Uuid::new_v4(),
+            agent_session_id: agent_session_id.map(str::to_string),
+            agent_message_id: None,
+            prompt: None,
+            summary: None,
+            seen: false,
+            created_at: Utc::now(),
+            updated_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn accepted_by_agent_requires_agent_session_id() {
+        let accepted = turn(Some("agent-session"));
+        let not_accepted = turn(None);
+
+        assert!(coding_agent_turn_accepted_by_agent(Some(&accepted)));
+        assert!(!coding_agent_turn_accepted_by_agent(Some(&not_accepted)));
+        assert!(!coding_agent_turn_accepted_by_agent(None));
+    }
 }

@@ -360,7 +360,20 @@ mod tests {
     use db::models::file::File;
     use uuid::Uuid;
 
-    use super::{ImportedIssueAttachment, rewrite_imported_issue_attachments_markdown};
+    use super::{
+        ImportedIssueAttachment, normalize_idempotency_key,
+        rewrite_imported_issue_attachments_markdown,
+    };
+
+    #[test]
+    fn normalize_idempotency_key_trims_and_drops_blank_values() {
+        assert_eq!(
+            normalize_idempotency_key(Some(" key ".to_string())),
+            Some("key".to_string())
+        );
+        assert_eq!(normalize_idempotency_key(Some(" \t\n ".to_string())), None);
+        assert_eq!(normalize_idempotency_key(None), None);
+    }
 
     fn imported_file(
         attachment_id: Uuid,

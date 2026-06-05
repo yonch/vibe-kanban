@@ -73,15 +73,16 @@ export function ChangesViewProvider({
   );
 
   const viewFileInChanges = useCallback(
-    (filePath: string) => {
+    (filePath: string, lineNumber?: number) => {
       setRightMainPanelMode(RIGHT_MAIN_PANEL_MODES.CHANGES, workspaceId);
       setSelectedFilePath(filePath);
+      setSelectedLineNumber(lineNumber ?? null);
       useFileInViewStore.getState().setFileInView(filePath);
 
       if (scrollToFileCallbackRef.current) {
-        scrollToFileCallbackRef.current(filePath);
+        scrollToFileCallbackRef.current(filePath, lineNumber);
       } else {
-        pendingScrollRef.current = { path: filePath };
+        pendingScrollRef.current = { path: filePath, lineNumber };
       }
     },
     [setRightMainPanelMode, workspaceId]

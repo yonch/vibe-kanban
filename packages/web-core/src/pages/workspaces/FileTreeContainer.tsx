@@ -48,8 +48,7 @@ export function FileTreeContainer({
   const getFirstCommentLineForFile = useGetFirstCommentLineForFile();
   const isGitHubCommentsLoading = useIsGitHubCommentsLoading();
 
-  const { selectedFilePath, scrollToFile, viewFileInChanges } =
-    useChangesView();
+  const { selectedFilePath, viewFileInChanges } = useChangesView();
   const fileInView = useFileInView();
   const activeFilePath = fileInView ?? selectedFilePath;
   const treeScrollRef = useRef<HTMLDivElement | null>(null);
@@ -176,13 +175,13 @@ export function FileTreeContainer({
       const targetPath = filesWithComments[nextIndex];
       const lineNumber = getFirstCommentLineForFile(targetPath);
 
-      scrollToFile(targetPath, lineNumber ?? undefined);
+      viewFileInChanges(targetPath, lineNumber ?? undefined);
     },
     [
       filesWithComments,
       activeFilePath,
       getFirstCommentLineForFile,
-      scrollToFile,
+      viewFileInChanges,
     ]
   );
 

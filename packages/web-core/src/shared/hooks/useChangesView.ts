@@ -9,14 +9,14 @@ interface ChangesViewContextValue {
   selectedLineNumber: number | null;
   selectFile: (path: string, lineNumber?: number) => void;
   scrollToFile: (path: string, lineNumber?: number) => void;
-  viewFileInChanges: (filePath: string) => void;
+  viewFileInChanges: (filePath: string, lineNumber?: number) => void;
   diffPaths: Set<string>;
   findMatchingDiffPath: (text: string) => string | null;
   registerScrollToFile: (callback: ScrollToFileCallback | null) => void;
 }
 
 interface ChangesViewActionsContextValue {
-  viewFileInChanges: (filePath: string) => void;
+  viewFileInChanges: (filePath: string, lineNumber?: number) => void;
   findMatchingDiffPath: (text: string) => string | null;
   hasDiffPath: (path: string) => boolean;
 }

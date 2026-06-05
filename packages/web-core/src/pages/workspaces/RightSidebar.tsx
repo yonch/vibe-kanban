@@ -73,21 +73,6 @@ export const RightSidebar = memo(function RightSidebar({
     false
   );
 
-  const hasUpperContent =
-    rightMainPanelMode === RIGHT_MAIN_PANEL_MODES.CHANGES ||
-    rightMainPanelMode === RIGHT_MAIN_PANEL_MODES.LOGS ||
-    rightMainPanelMode === RIGHT_MAIN_PANEL_MODES.PREVIEW;
-
-  const upperExpanded = (() => {
-    if (rightMainPanelMode === RIGHT_MAIN_PANEL_MODES.CHANGES)
-      return changesExpanded;
-    if (rightMainPanelMode === RIGHT_MAIN_PANEL_MODES.LOGS)
-      return processesExpanded;
-    if (rightMainPanelMode === RIGHT_MAIN_PANEL_MODES.PREVIEW)
-      return devServerExpanded;
-    return false;
-  })();
-
   const sections: SectionDef[] = useMemo(() => {
     const result: SectionDef[] = [
       {
@@ -103,6 +88,25 @@ export const RightSidebar = memo(function RightSidebar({
         ),
         actions: [],
       },
+      ...(selectedWorkspace
+        ? [
+            {
+              title: 'Changes',
+              persistKey: PERSIST_KEYS.changesSection,
+              visible: true,
+              expanded: changesExpanded,
+              content: (
+                <FileTreeContainer
+                  key={selectedWorkspace.id}
+                  workspaceId={selectedWorkspace.id}
+                  diffs={diffs}
+                  className=""
+                />
+              ),
+              actions: [],
+            },
+          ]
+        : []),
       {
         title: 'Terminal',
         persistKey: PERSIST_KEYS.terminalSection,
@@ -122,31 +126,12 @@ export const RightSidebar = memo(function RightSidebar({
     ];
 
     switch (rightMainPanelMode) {
-      case RIGHT_MAIN_PANEL_MODES.CHANGES:
-        if (selectedWorkspace) {
-          result.unshift({
-            title: 'Changes',
-            persistKey: PERSIST_KEYS.changesSection,
-            visible: hasUpperContent,
-            expanded: upperExpanded,
-            content: (
-              <FileTreeContainer
-                key={selectedWorkspace.id}
-                workspaceId={selectedWorkspace.id}
-                diffs={diffs}
-                className=""
-              />
-            ),
-            actions: [],
-          });
-        }
-        break;
       case RIGHT_MAIN_PANEL_MODES.LOGS:
         result.unshift({
           title: 'Logs',
           persistKey: PERSIST_KEYS.rightPanelprocesses,
-          visible: hasUpperContent,
-          expanded: upperExpanded,
+          visible: true,
+          expanded: processesExpanded,
           content: <ProcessListContainer />,
           actions: [],
         });
@@ -156,8 +141,8 @@ export const RightSidebar = memo(function RightSidebar({
           result.unshift({
             title: 'Preview',
             persistKey: PERSIST_KEYS.rightPanelPreview,
-            visible: hasUpperContent,
-            expanded: upperExpanded,
+            visible: true,
+            expanded: devServerExpanded,
             content: (
               <PreviewControlsContainer
                 workspaceId={selectedWorkspace.id}
@@ -186,8 +171,6 @@ export const RightSidebar = memo(function RightSidebar({
     devServerExpanded,
     isTerminalVisible,
     isTerminalExpanded,
-    hasUpperContent,
-    upperExpanded,
     expandTerminal,
     t,
   ]);

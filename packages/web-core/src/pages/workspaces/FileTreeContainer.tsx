@@ -48,7 +48,7 @@ export function FileTreeContainer({
   const getFirstCommentLineForFile = useGetFirstCommentLineForFile();
   const isGitHubCommentsLoading = useIsGitHubCommentsLoading();
 
-  const { selectedFilePath, scrollToFile } = useChangesView();
+  const { selectedFilePath, viewFileInChanges } = useChangesView();
   const fileInView = useFileInView();
   const activeFilePath = fileInView ?? selectedFilePath;
   const treeScrollRef = useRef<HTMLDivElement | null>(null);
@@ -135,10 +135,10 @@ export function FileTreeContainer({
 
       if (diff) {
         const targetPath = diff.newPath || diff.oldPath || path;
-        scrollToFile(targetPath);
+        viewFileInChanges(targetPath);
       }
     },
-    [diffs, scrollToFile]
+    [diffs, viewFileInChanges]
   );
 
   // Get list of diff paths that have GitHub comments, sorted to match visual order
@@ -175,13 +175,13 @@ export function FileTreeContainer({
       const targetPath = filesWithComments[nextIndex];
       const lineNumber = getFirstCommentLineForFile(targetPath);
 
-      scrollToFile(targetPath, lineNumber ?? undefined);
+      viewFileInChanges(targetPath, lineNumber ?? undefined);
     },
     [
       filesWithComments,
       activeFilePath,
       getFirstCommentLineForFile,
-      scrollToFile,
+      viewFileInChanges,
     ]
   );
 

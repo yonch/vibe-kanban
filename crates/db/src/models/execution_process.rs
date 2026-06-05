@@ -82,6 +82,7 @@ pub struct CreateExecutionProcess {
     pub session_id: Uuid,
     pub executor_action: ExecutorAction,
     pub run_reason: ExecutionProcessRunReason,
+    pub idempotency_key: Option<String>,
 }
 
 #[derive(Debug)]
@@ -139,6 +140,34 @@ impl ExecutionProcess {
                     ep.updated_at as "updated_at!: DateTime<Utc>"
                FROM execution_processes ep WHERE ep.id = ?"#,
             id
+        )
+        .fetch_optional(pool)
+        .await
+    }
+
+    pub async fn find_by_session_and_idempotency_key(
+        pool: &SqlitePool,
+        session_id: Uuid,
+        idempotency_key: &str,
+    ) -> Result<Option<Self>, sqlx::Error> {
+        sqlx::query_as!(
+            ExecutionProcess,
+            r#"SELECT
+                    ep.id as "id!: Uuid",
+                    ep.session_id as "session_id!: Uuid",
+                    ep.run_reason as "run_reason!: ExecutionProcessRunReason",
+                    ep.executor_action as "executor_action!: sqlx::types::Json<ExecutorActionField>",
+                    ep.status as "status!: ExecutionProcessStatus",
+                    ep.exit_code,
+                    ep.dropped as "dropped!: bool",
+                    ep.started_at as "started_at!: DateTime<Utc>",
+                    ep.completed_at as "completed_at?: DateTime<Utc>",
+                    ep.created_at as "created_at!: DateTime<Utc>",
+                    ep.updated_at as "updated_at!: DateTime<Utc>"
+               FROM execution_processes ep
+               WHERE ep.session_id = ? AND ep.idempotency_key = ?"#,
+            session_id,
+            idempotency_key
         )
         .fetch_optional(pool)
         .await
@@ -392,8 +421,9 @@ impl ExecutionProcess {
         sqlx::query!(
             r#"INSERT INTO execution_processes (
                     id, session_id, run_reason, executor_action,
-                    status, exit_code, started_at, completed_at, created_at, updated_at
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+                    status, exit_code, started_at, completed_at, created_at, updated_at,
+                    idempotency_key
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
             process_id,
             data.session_id,
             data.run_reason,
@@ -403,7 +433,8 @@ impl ExecutionProcess {
             now,
             None::<DateTime<Utc>>,
             now,
-            now
+            now,
+            data.idempotency_key
         )
         .execute(pool)
         .await?;

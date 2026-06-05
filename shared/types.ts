@@ -304,7 +304,7 @@ export type RefreshRelaySigningSessionRequest = { client_id: string, timestamp: 
 
 export type RefreshRelaySigningSessionResponse = { signing_session_id: string, };
 
-export type CreateFollowUpAttempt = { prompt: string, executor_config: ExecutorConfig, retry_process_id: string | null, force_when_dirty: boolean | null, perform_git_reset: boolean | null, };
+export type CreateFollowUpAttempt = { prompt: string, executor_config: ExecutorConfig, retry_process_id: string | null, force_when_dirty: boolean | null, perform_git_reset: boolean | null, idempotency_key: string | null, };
 
 export type ResetProcessRequest = { process_id: string, force_when_dirty: boolean | null, perform_git_reset: boolean | null, };
 
@@ -346,7 +346,7 @@ export type ListRelayPairedHostsResponse = { hosts: Array<RelayPairedHost>, };
 
 export type RemoveRelayPairedHostResponse = { removed: boolean, };
 
-export type CreateWorkspaceApiRequest = { name: string | null, };
+export type CreateWorkspaceApiRequest = { name: string | null, idempotency_key: string | null, };
 
 export type LinkedIssueInfo = { remote_project_id: string, issue_id: string, };
 
@@ -398,7 +398,7 @@ export type SquashMergePrRequest = { repo_id: string, };
 
 export type SquashMergeError = { "type": "no_pr_attached" } | { "type": "pr_not_open" } | { "type": "unpushed_commits" } | { "type": "cli_not_installed", provider: ProviderKind, } | { "type": "cli_not_logged_in", provider: ProviderKind, } | { "type": "unsupported_provider" } | { "type": "merge_failed", message: string, };
 
-export type CreateAndStartWorkspaceRequest = { name: string | null, repos: Array<WorkspaceRepoInput>, linked_issue: LinkedIssueInfo | null, executor_config: ExecutorConfig, prompt: string, attachment_ids: Array<string> | null, };
+export type CreateAndStartWorkspaceRequest = { name: string | null, repos: Array<WorkspaceRepoInput>, linked_issue: LinkedIssueInfo | null, executor_config: ExecutorConfig, prompt: string, attachment_ids: Array<string> | null, idempotency_key: string | null, };
 
 export type CreateAndStartWorkspaceResponse = { workspace: Workspace, execution_process: ExecutionProcess, };
 

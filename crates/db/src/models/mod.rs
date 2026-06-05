@@ -3,6 +3,7 @@ pub mod execution_process;
 pub mod execution_process_logs;
 pub mod execution_process_repo_state;
 pub mod file;
+pub mod idempotency;
 pub mod merge;
 pub mod project;
 pub mod pull_request;
@@ -14,3 +15,6 @@ pub mod tag;
 pub mod task;
 pub mod workspace;
 pub mod workspace_repo;
+
+#[cfg(test)]
+mod idempotency_tests;

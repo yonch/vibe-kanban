@@ -92,6 +92,7 @@ pub async fn start_dev_server(
                 &CreateSession {
                     executor: Some("dev-server".to_string()),
                     name: None,
+                    idempotency_key: None,
                 },
                 Uuid::new_v4(),
                 workspace.id,
@@ -192,6 +193,7 @@ pub async fn run_cleanup_script(
                 &CreateSession {
                     executor: None,
                     name: None,
+                    idempotency_key: None,
                 },
                 Uuid::new_v4(),
                 workspace.id,
@@ -257,6 +259,7 @@ pub async fn run_archive_script(
                 &CreateSession {
                     executor: None,
                     name: None,
+                    idempotency_key: None,
                 },
                 Uuid::new_v4(),
                 workspace.id,

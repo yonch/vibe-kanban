@@ -241,6 +241,7 @@ export function CreateChatBoxContainer({
           }
         : null,
       attachment_ids: getAttachmentIds(),
+      idempotency_key: null,
     };
     const linkToIssue = linkedIssue
       ? {

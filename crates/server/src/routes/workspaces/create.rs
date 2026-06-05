@@ -2,10 +2,13 @@ use std::collections::HashMap;
 
 use axum::{Json, extract::State, response::Json as ResponseJson};
 use db::models::{
+    execution_process::ExecutionProcess,
+    idempotency::{is_unique_violation, normalize_idempotency_key},
     requests::{
         CreateAndStartWorkspaceRequest, CreateAndStartWorkspaceResponse, CreateWorkspaceApiRequest,
     },
-    workspace::{CreateWorkspace, Workspace},
+    session::Session,
+    workspace::{CreateWorkspace, Workspace, WorkspaceError},
 };
 use deployment::Deployment;
 use services::services::container::ContainerService;
@@ -23,7 +26,16 @@ use crate::{
 pub(crate) async fn create_workspace_record(
     deployment: &DeploymentImpl,
     name: Option<String>,
+    idempotency_key: Option<String>,
 ) -> Result<Workspace, ApiError> {
+    let idempotency_key = normalize_idempotency_key(idempotency_key);
+    if let Some(key) = idempotency_key.as_deref()
+        && let Some(workspace) =
+            Workspace::find_by_idempotency_key(&deployment.db().pool, key).await?
+    {
+        return Ok(workspace);
+    }
+
     let workspace_id = Uuid::new_v4();
     let branch_label = name
         .as_deref()
@@ -34,15 +46,30 @@ pub(crate) async fn create_workspace_record(
         .git_branch_from_workspace(&workspace_id, branch_label)
         .await;
 
-    let workspace = Workspace::create(
+    let create_result = Workspace::create(
         &deployment.db().pool,
         &CreateWorkspace {
             branch: git_branch_name,
             name: name.filter(|workspace_name| !workspace_name.is_empty()),
+            idempotency_key: idempotency_key.clone(),
         },
         workspace_id,
     )
-    .await?;
+    .await;
+
+    let workspace = match create_result {
+        Ok(workspace) => workspace,
+        Err(err) => {
+            if matches!(&err, WorkspaceError::Database(db_err) if is_unique_violation(db_err))
+                && let Some(key) = idempotency_key.as_deref()
+                && let Some(workspace) =
+                    Workspace::find_by_idempotency_key(&deployment.db().pool, key).await?
+            {
+                return Ok(workspace);
+            }
+            return Err(err.into());
+        }
+    };
 
     Ok(workspace)
 }
@@ -51,7 +78,8 @@ pub async fn create_workspace(
     State(deployment): State<DeploymentImpl>,
     Json(payload): Json<CreateWorkspaceApiRequest>,
 ) -> Result<ResponseJson<ApiResponse<Workspace>>, ApiError> {
-    let workspace = create_workspace_record(&deployment, payload.name).await?;
+    let workspace =
+        create_workspace_record(&deployment, payload.name, payload.idempotency_key).await?;
 
     deployment
         .track_if_analytics_allowed(
@@ -220,7 +248,9 @@ pub async fn create_and_start_workspace(
         executor_config,
         prompt,
         attachment_ids,
+        idempotency_key,
     } = payload;
+    let idempotency_key = normalize_idempotency_key(idempotency_key);
 
     let mut workspace_prompt = normalize_prompt(&prompt).ok_or_else(|| {
         ApiError::BadRequest(
@@ -234,12 +264,54 @@ pub async fn create_and_start_workspace(
         ));
     }
 
+    let is_idempotent_replay = if let Some(key) = idempotency_key.as_deref() {
+        Workspace::find_by_idempotency_key(&deployment.db().pool, key)
+            .await?
+            .is_some()
+    } else {
+        false
+    };
+
     let mut managed_workspace = deployment
         .workspace_manager()
-        .load_managed_workspace(create_workspace_record(&deployment, name).await?)
+        .load_managed_workspace(
+            create_workspace_record(&deployment, name, idempotency_key.clone()).await?,
+        )
         .await?;
+    if let Some(key) = idempotency_key.as_deref() {
+        let session_key = format!("{key}:session");
+        let execution_key = format!("{key}:execution");
+        if let Some(session) = Session::find_by_workspace_and_idempotency_key(
+            &deployment.db().pool,
+            managed_workspace.workspace.id,
+            &session_key,
+        )
+        .await?
+            && let Some(execution_process) = ExecutionProcess::find_by_session_and_idempotency_key(
+                &deployment.db().pool,
+                session.id,
+                &execution_key,
+            )
+            .await?
+        {
+            return Ok(ResponseJson(ApiResponse::success(
+                CreateAndStartWorkspaceResponse {
+                    workspace: managed_workspace.workspace,
+                    execution_process,
+                },
+            )));
+        }
+    }
 
     for repo in &repos {
+        if is_idempotent_replay
+            && managed_workspace.repos.iter().any(|attached| {
+                attached.repo.id == repo.repo_id && attached.target_branch == repo.target_branch
+            })
+        {
+            continue;
+        }
+
         managed_workspace
             .add_repository(repo, deployment.git())
             .await
@@ -297,7 +369,12 @@ pub async fn create_and_start_workspace(
 
     let execution_process = deployment
         .container()
-        .start_workspace(&workspace, executor_config.clone(), workspace_prompt)
+        .start_workspace(
+            &workspace,
+            executor_config.clone(),
+            workspace_prompt,
+            idempotency_key,
+        )
         .await?;
 
     deployment

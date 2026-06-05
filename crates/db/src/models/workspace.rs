@@ -85,6 +85,7 @@ pub struct WorkspaceContext {
 pub struct CreateWorkspace {
     pub branch: String,
     pub name: Option<String>,
+    pub idempotency_key: Option<String>,
 }
 
 impl Workspace {
@@ -213,6 +214,31 @@ impl Workspace {
         .await
     }
 
+    pub async fn find_by_idempotency_key(
+        pool: &SqlitePool,
+        idempotency_key: &str,
+    ) -> Result<Option<Self>, sqlx::Error> {
+        sqlx::query_as!(
+            Workspace,
+            r#"SELECT  id                AS "id!: Uuid",
+                       task_id           AS "task_id: Uuid",
+                       container_ref,
+                       branch,
+                       setup_completed_at AS "setup_completed_at: DateTime<Utc>",
+                       created_at        AS "created_at!: DateTime<Utc>",
+                       updated_at        AS "updated_at!: DateTime<Utc>",
+                       archived          AS "archived!: bool",
+                       pinned            AS "pinned!: bool",
+                       name,
+                       worktree_deleted  AS "worktree_deleted!: bool"
+               FROM    workspaces
+               WHERE   idempotency_key = $1"#,
+            idempotency_key
+        )
+        .fetch_optional(pool)
+        .await
+    }
+
     pub async fn find_by_rowid(pool: &SqlitePool, rowid: i64) -> Result<Option<Self>, sqlx::Error> {
         sqlx::query_as!(
             Workspace,
@@ -315,15 +341,16 @@ impl Workspace {
     ) -> Result<Self, WorkspaceError> {
         Ok(sqlx::query_as!(
             Workspace,
-            r#"INSERT INTO workspaces (id, task_id, container_ref, branch, setup_completed_at, name)
-               VALUES ($1, $2, $3, $4, $5, $6)
+            r#"INSERT INTO workspaces (id, task_id, container_ref, branch, setup_completed_at, name, idempotency_key)
+               VALUES ($1, $2, $3, $4, $5, $6, $7)
                RETURNING id as "id!: Uuid", task_id as "task_id: Uuid", container_ref, branch, setup_completed_at as "setup_completed_at: DateTime<Utc>", created_at as "created_at!: DateTime<Utc>", updated_at as "updated_at!: DateTime<Utc>", archived as "archived!: bool", pinned as "pinned!: bool", name, worktree_deleted as "worktree_deleted!: bool""#,
             id,
             Option::<Uuid>::None,
             Option::<String>::None,
             data.branch,
             Option::<DateTime<Utc>>::None,
-            data.name
+            data.name,
+            data.idempotency_key
         )
         .fetch_one(pool)
         .await?)

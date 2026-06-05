@@ -34,6 +34,7 @@ pub struct Session {
 pub struct CreateSession {
     pub executor: Option<String>,
     pub name: Option<String>,
+    pub idempotency_key: Option<String>,
 }
 
 impl Session {
@@ -83,6 +84,29 @@ impl Session {
             workspace_id
         )
         .fetch_all(pool)
+        .await
+    }
+
+    pub async fn find_by_workspace_and_idempotency_key(
+        pool: &SqlitePool,
+        workspace_id: Uuid,
+        idempotency_key: &str,
+    ) -> Result<Option<Self>, sqlx::Error> {
+        sqlx::query_as!(
+            Session,
+            r#"SELECT id AS "id!: Uuid",
+                      workspace_id AS "workspace_id!: Uuid",
+                      name,
+                      executor,
+                      agent_working_dir,
+                      created_at AS "created_at!: DateTime<Utc>",
+                      updated_at AS "updated_at!: DateTime<Utc>"
+               FROM sessions
+               WHERE workspace_id = $1 AND idempotency_key = $2"#,
+            workspace_id,
+            idempotency_key
+        )
+        .fetch_optional(pool)
         .await
     }
 
@@ -153,8 +177,8 @@ impl Session {
 
         Ok(sqlx::query_as!(
             Session,
-            r#"INSERT INTO sessions (id, workspace_id, name, executor, agent_working_dir)
-               VALUES ($1, $2, $3, $4, $5)
+            r#"INSERT INTO sessions (id, workspace_id, name, executor, agent_working_dir, idempotency_key)
+               VALUES ($1, $2, $3, $4, $5, $6)
                RETURNING id AS "id!: Uuid",
                          workspace_id AS "workspace_id!: Uuid",
                          name,
@@ -166,7 +190,8 @@ impl Session {
             workspace_id,
             name,
             data.executor,
-            agent_working_dir
+            agent_working_dir,
+            data.idempotency_key
         )
         .fetch_one(pool)
         .await?)

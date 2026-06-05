@@ -17,6 +17,7 @@ use db::{
         execution_process_repo_state::{
             CreateExecutionProcessRepoState, ExecutionProcessRepoState,
         },
+        idempotency::{is_unique_violation, normalize_idempotency_key},
         repo::Repo,
         session::{CreateSession, Session, SessionError},
         workspace::{Workspace, WorkspaceError},
@@ -59,6 +60,11 @@ use worktree_manager::WorktreeError;
 
 use crate::services::{execution_process, notification::NotificationService};
 pub type ContainerRef = String;
+
+pub enum ExecutionClaim {
+    Created(ExecutionProcess),
+    Existing(ExecutionProcess),
+}
 
 #[derive(Debug, Error)]
 pub enum ContainerError {
@@ -505,6 +511,7 @@ pub trait ContainerService {
                     &CreateSession {
                         executor: None,
                         name: None,
+                        idempotency_key: None,
                     },
                     Uuid::new_v4(),
                     workspace.id,
@@ -1049,9 +1056,19 @@ pub trait ContainerService {
         workspace: &Workspace,
         executor_config: ExecutorConfig,
         prompt: String,
+        idempotency_key: Option<String>,
     ) -> Result<ExecutionProcess, ContainerError> {
-        // Create container
-        self.create(workspace).await?;
+        let idempotency_key = normalize_idempotency_key(idempotency_key);
+        let session_key = idempotency_key
+            .as_deref()
+            .map(|key| format!("{key}:session"));
+        let execution_key = idempotency_key
+            .as_deref()
+            .map(|key| format!("{key}:execution"));
+
+        // Replays should repair missing filesystem/container state before
+        // returning an existing session or execution row.
+        self.ensure_container_exists(workspace).await?;
 
         let repos = WorkspaceRepo::find_repos_for_workspace(&self.db().pool, workspace.id).await?;
 
@@ -1060,16 +1077,55 @@ pub trait ContainerService {
             .ok_or(SqlxError::RowNotFound)?;
 
         // Create a session for this workspace
-        let session = Session::create(
-            &self.db().pool,
-            &CreateSession {
-                executor: Some(executor_config.executor.to_string()),
-                name: None,
-            },
-            Uuid::new_v4(),
-            workspace.id,
-        )
-        .await?;
+        let session = if let Some(key) = session_key.as_deref()
+            && let Some(existing) =
+                Session::find_by_workspace_and_idempotency_key(&self.db().pool, workspace.id, key)
+                    .await?
+        {
+            existing
+        } else {
+            let create_result = Session::create(
+                &self.db().pool,
+                &CreateSession {
+                    executor: Some(executor_config.executor.to_string()),
+                    name: None,
+                    idempotency_key: session_key.clone(),
+                },
+                Uuid::new_v4(),
+                workspace.id,
+            )
+            .await;
+
+            match create_result {
+                Ok(session) => session,
+                Err(err) => {
+                    if matches!(&err, SessionError::Database(db_err) if is_unique_violation(db_err))
+                        && let Some(key) = session_key.as_deref()
+                        && let Some(existing) = Session::find_by_workspace_and_idempotency_key(
+                            &self.db().pool,
+                            workspace.id,
+                            key,
+                        )
+                        .await?
+                    {
+                        existing
+                    } else {
+                        return Err(err.into());
+                    }
+                }
+            }
+        };
+
+        if let Some(key) = execution_key.as_deref()
+            && let Some(existing) = ExecutionProcess::find_by_session_and_idempotency_key(
+                &self.db().pool,
+                session.id,
+                key,
+            )
+            .await?
+        {
+            return Ok(existing);
+        }
 
         let repos_with_setup: Vec<_> = repos.iter().filter(|r| r.setup_script.is_some()).collect();
 
@@ -1108,21 +1164,23 @@ pub trait ContainerService {
                     tracing::warn!(?e, "Failed to start setup script in parallel mode");
                 }
             }
-            self.start_execution(
+            self.start_execution_with_idempotency_key(
                 &workspace,
                 &session,
                 &coding_action,
                 &ExecutionProcessRunReason::CodingAgent,
+                execution_key,
             )
             .await?
         } else {
             // Any sequential: chain ALL setups → coding agent via next_action
             let main_action = Self::build_sequential_setup_chain(&repos_with_setup, coding_action);
-            self.start_execution(
+            self.start_execution_with_idempotency_key(
                 &workspace,
                 &session,
                 &main_action,
                 &ExecutionProcessRunReason::SetupScript,
+                execution_key,
             )
             .await?
         };
@@ -1137,6 +1195,68 @@ pub trait ContainerService {
         executor_action: &ExecutorAction,
         run_reason: &ExecutionProcessRunReason,
     ) -> Result<ExecutionProcess, ContainerError> {
+        self.start_execution_with_idempotency_key(
+            workspace,
+            session,
+            executor_action,
+            run_reason,
+            None,
+        )
+        .await
+    }
+
+    async fn start_execution_with_idempotency_key(
+        &self,
+        workspace: &Workspace,
+        session: &Session,
+        executor_action: &ExecutorAction,
+        run_reason: &ExecutionProcessRunReason,
+        idempotency_key: Option<String>,
+    ) -> Result<ExecutionProcess, ContainerError> {
+        let claim = self
+            .claim_execution_with_idempotency_key(
+                workspace,
+                session,
+                executor_action,
+                run_reason,
+                idempotency_key,
+            )
+            .await?;
+
+        match claim {
+            ExecutionClaim::Existing(execution_process) => Ok(execution_process),
+            ExecutionClaim::Created(execution_process) => {
+                self.finish_claimed_execution(
+                    workspace,
+                    session,
+                    executor_action,
+                    execution_process,
+                )
+                .await
+            }
+        }
+    }
+
+    async fn claim_execution_with_idempotency_key(
+        &self,
+        workspace: &Workspace,
+        session: &Session,
+        executor_action: &ExecutorAction,
+        run_reason: &ExecutionProcessRunReason,
+        idempotency_key: Option<String>,
+    ) -> Result<ExecutionClaim, ContainerError> {
+        let idempotency_key = normalize_idempotency_key(idempotency_key);
+        if let Some(key) = idempotency_key.as_deref()
+            && let Some(existing) = ExecutionProcess::find_by_session_and_idempotency_key(
+                &self.db().pool,
+                session.id,
+                key,
+            )
+            .await?
+        {
+            return Ok(ExecutionClaim::Existing(existing));
+        }
+
         // Create new execution process record
         // Capture current HEAD per repository as the "before" commit for this execution
         let repositories =
@@ -1168,20 +1288,48 @@ pub trait ContainerService {
             session_id: session.id,
             executor_action: executor_action.clone(),
             run_reason: run_reason.clone(),
+            idempotency_key: idempotency_key.clone(),
         };
 
-        let execution_process = ExecutionProcess::create(
+        let execution_process = match ExecutionProcess::create(
             &self.db().pool,
             &create_execution_process,
             Uuid::new_v4(),
             &repo_states,
         )
-        .await?;
+        .await
+        {
+            Ok(execution_process) => execution_process,
+            Err(err) => {
+                if is_unique_violation(&err)
+                    && let Some(key) = idempotency_key.as_deref()
+                    && let Some(existing) = ExecutionProcess::find_by_session_and_idempotency_key(
+                        &self.db().pool,
+                        session.id,
+                        key,
+                    )
+                    .await?
+                {
+                    return Ok(ExecutionClaim::Existing(existing));
+                }
+                return Err(err.into());
+            }
+        };
         self.msg_stores()
             .write()
             .await
             .insert(execution_process.id, Arc::new(MsgStore::new()));
-        if *run_reason != ExecutionProcessRunReason::ArchiveScript
+        Ok(ExecutionClaim::Created(execution_process))
+    }
+
+    async fn finish_claimed_execution(
+        &self,
+        workspace: &Workspace,
+        session: &Session,
+        executor_action: &ExecutorAction,
+        execution_process: ExecutionProcess,
+    ) -> Result<ExecutionProcess, ContainerError> {
+        if execution_process.run_reason != ExecutionProcessRunReason::ArchiveScript
             && let Err(e) = Workspace::set_archived(&self.db().pool, workspace.id, false).await
         {
             self.msg_stores()

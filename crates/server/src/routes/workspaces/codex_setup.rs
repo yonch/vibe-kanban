@@ -56,6 +56,7 @@ pub async fn run_codex_setup(
                     &CreateSession {
                         executor: Some("codex".to_string()),
                         name: None,
+                        idempotency_key: None,
                     },
                     Uuid::new_v4(),
                     workspace.id,

@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     path::{Path, PathBuf},
     sync::{Arc, LazyLock},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use codex_app_server_protocol::{
@@ -62,6 +62,7 @@ use crate::{
 const COMMAND_OUTPUT_TAIL_BYTES: usize = 256 * 1024;
 const COMMAND_OUTPUT_TRUNCATE_THRESHOLD_BYTES: usize = COMMAND_OUTPUT_TAIL_BYTES * 2;
 const COMMAND_OUTPUT_UPDATE_BYTES: usize = 32 * 1024;
+const COMMAND_OUTPUT_UPDATE_INTERVAL: Duration = Duration::from_millis(500);
 
 trait ToNormalizedEntry {
     fn to_normalized_entry(&self) -> NormalizedEntry;
@@ -164,6 +165,7 @@ struct CommandState {
     stderr: BoundedOutput,
     formatted_output: Option<String>,
     pending_output_bytes: usize,
+    last_output_flush_at: Option<Instant>,
     status: ToolStatus,
     exit_code: Option<i32>,
     awaiting_approval: bool,
@@ -211,6 +213,7 @@ impl CommandState {
                 .unwrap_or_default()
         });
         self.pending_output_bytes = 0;
+        self.last_output_flush_at = Some(Instant::now());
     }
 
     fn push_stdout(&mut self, chunk: &str) -> bool {
@@ -227,12 +230,24 @@ impl CommandState {
     }
 
     fn note_output_delta(&mut self, bytes: usize) -> bool {
+        self.note_output_delta_at(bytes, Instant::now())
+    }
+
+    fn note_output_delta_at(&mut self, bytes: usize, now: Instant) -> bool {
         self.pending_output_bytes = self.pending_output_bytes.saturating_add(bytes);
         self.pending_output_bytes >= COMMAND_OUTPUT_UPDATE_BYTES
+            || self.last_output_flush_at.is_none_or(|last_flush| {
+                now.duration_since(last_flush) >= COMMAND_OUTPUT_UPDATE_INTERVAL
+            })
     }
 
     fn mark_output_flushed(&mut self) {
+        self.mark_output_flushed_at(Instant::now());
+    }
+
+    fn mark_output_flushed_at(&mut self, now: Instant) {
         self.pending_output_bytes = 0;
+        self.last_output_flush_at = Some(now);
     }
 }
 
@@ -1902,6 +1917,7 @@ pub fn normalize_logs(
                             stderr: BoundedOutput::default(),
                             formatted_output: None,
                             pending_output_bytes: 0,
+                            last_output_flush_at: None,
                             status: ToolStatus::Created,
                             exit_code: None,
                             awaiting_approval: false,
@@ -2965,6 +2981,7 @@ mod tests {
             stderr: BoundedOutput::default(),
             formatted_output: None,
             pending_output_bytes: 0,
+            last_output_flush_at: None,
             status: ToolStatus::Success,
             exit_code: Some(0),
             awaiting_approval: false,
@@ -3007,6 +3024,7 @@ mod tests {
             stderr: BoundedOutput::default(),
             formatted_output: None,
             pending_output_bytes: 0,
+            last_output_flush_at: None,
             status: ToolStatus::Success,
             exit_code: Some(0),
             awaiting_approval: false,
@@ -3029,6 +3047,51 @@ mod tests {
             }
             other => panic!("unexpected command entry: {other:?}"),
         }
+    }
+
+    #[test]
+    fn command_output_flushes_first_delta() {
+        let mut command_state = CommandState::default();
+        let now = Instant::now();
+
+        assert!(command_state.note_output_delta_at(1, now));
+        assert_eq!(command_state.pending_output_bytes, 1);
+    }
+
+    #[test]
+    fn command_output_suppresses_small_delta_before_interval() {
+        let mut command_state = CommandState::default();
+        let now = Instant::now();
+        command_state.mark_output_flushed_at(now);
+
+        assert!(!command_state.note_output_delta_at(
+            1,
+            now + COMMAND_OUTPUT_UPDATE_INTERVAL - Duration::from_millis(1),
+        ));
+        assert_eq!(command_state.pending_output_bytes, 1);
+    }
+
+    #[test]
+    fn command_output_flushes_small_delta_after_interval() {
+        let mut command_state = CommandState::default();
+        let now = Instant::now();
+        command_state.mark_output_flushed_at(now);
+
+        assert!(command_state.note_output_delta_at(1, now + COMMAND_OUTPUT_UPDATE_INTERVAL));
+        assert_eq!(command_state.pending_output_bytes, 1);
+    }
+
+    #[test]
+    fn command_output_flushes_at_byte_threshold_before_interval() {
+        let mut command_state = CommandState::default();
+        let now = Instant::now();
+        command_state.mark_output_flushed_at(now);
+
+        assert!(command_state.note_output_delta_at(COMMAND_OUTPUT_UPDATE_BYTES, now));
+        assert_eq!(
+            command_state.pending_output_bytes,
+            COMMAND_OUTPUT_UPDATE_BYTES
+        );
     }
 
     #[tokio::test]

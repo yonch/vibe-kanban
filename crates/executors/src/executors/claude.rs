@@ -1282,7 +1282,7 @@ impl ClaudeLogProcessor {
                             }
                         }
                     }
-                    Some("compact_boundary") => {}
+                    Some("compact_boundary") | Some("thinking_tokens") => {}
                     Some("task_started") => {
                         if let Some(tool_use_id) = tool_use_id
                             && !self.tool_map.contains_key(tool_use_id)
@@ -2819,6 +2819,14 @@ mod tests {
         // "requesting" is a transient progress indicator emitted before every
         // LLM request; we don't want it cluttering the conversation history.
         let json = r#"{"type":"system","subtype":"status","status":"requesting"}"#;
+        let parsed: ClaudeJson = serde_json::from_str(json).unwrap();
+        let entries = normalize(&parsed, "");
+        assert_eq!(entries.len(), 0);
+    }
+
+    #[test]
+    fn test_thinking_tokens_system_message_is_filtered() {
+        let json = r#"{"type":"system","subtype":"thinking_tokens"}"#;
         let parsed: ClaudeJson = serde_json::from_str(json).unwrap();
         let entries = normalize(&parsed, "");
         assert_eq!(entries.len(), 0);

@@ -39,6 +39,7 @@ use serde_json::Value;
 use workspace_utils::{
     approvals::{ApprovalStatus, QuestionStatus},
     diff::normalize_unified_diff,
+    log_msg::LogMsg,
     msg_store::MsgStore,
     path::make_path_relative,
 };
@@ -57,6 +58,10 @@ use crate::{
         },
     },
 };
+
+const COMMAND_OUTPUT_TAIL_BYTES: usize = 256 * 1024;
+const COMMAND_OUTPUT_TRUNCATE_THRESHOLD_BYTES: usize = COMMAND_OUTPUT_TAIL_BYTES * 2;
+const COMMAND_OUTPUT_UPDATE_BYTES: usize = 32 * 1024;
 
 trait ToNormalizedEntry {
     fn to_normalized_entry(&self) -> NormalizedEntry;
@@ -79,12 +84,86 @@ struct StreamingText {
 }
 
 #[derive(Default)]
+struct BoundedOutput {
+    tail: String,
+    omitted_bytes: usize,
+}
+
+impl BoundedOutput {
+    fn from_str(s: &str) -> Self {
+        let keep_from = tail_keep_from(s, COMMAND_OUTPUT_TAIL_BYTES);
+        Self {
+            tail: s[keep_from..].to_string(),
+            omitted_bytes: keep_from,
+        }
+    }
+
+    fn push_str(&mut self, chunk: &str) {
+        self.tail.push_str(chunk);
+        self.truncate_to_tail();
+    }
+
+    fn push_lossy(&mut self, chunk: &[u8]) {
+        let chunk = String::from_utf8_lossy(chunk);
+        if chunk.is_empty() {
+            return;
+        }
+
+        self.push_str(&chunk);
+    }
+
+    fn truncate_to_tail(&mut self) {
+        if self.tail.len() <= COMMAND_OUTPUT_TRUNCATE_THRESHOLD_BYTES {
+            return;
+        }
+
+        let keep_from = tail_keep_from(&self.tail, COMMAND_OUTPUT_TAIL_BYTES);
+        self.omitted_bytes += keep_from;
+        self.tail.drain(..keep_from);
+    }
+
+    fn display(&self) -> Option<String> {
+        let keep_from = tail_keep_from(&self.tail, COMMAND_OUTPUT_TAIL_BYTES);
+        let omitted_bytes = self.omitted_bytes + keep_from;
+        let tail = &self.tail[keep_from..];
+
+        if tail.trim().is_empty() && omitted_bytes == 0 {
+            return None;
+        }
+
+        if omitted_bytes == 0 {
+            Some(tail.to_string())
+        } else {
+            Some(format!(
+                "[{} bytes omitted; showing last {} bytes]\n{}",
+                omitted_bytes,
+                tail.len(),
+                tail
+            ))
+        }
+    }
+}
+
+fn tail_keep_from(s: &str, max_tail_bytes: usize) -> usize {
+    if s.len() <= max_tail_bytes {
+        return 0;
+    }
+
+    let mut keep_from = s.len() - max_tail_bytes;
+    while keep_from < s.len() && !s.is_char_boundary(keep_from) {
+        keep_from += 1;
+    }
+    keep_from
+}
+
+#[derive(Default)]
 struct CommandState {
     index: Option<usize>,
     command: String,
-    stdout: String,
-    stderr: String,
+    stdout: BoundedOutput,
+    stderr: BoundedOutput,
     formatted_output: Option<String>,
+    pending_output_bytes: usize,
     status: ToolStatus,
     exit_code: Option<i32>,
     awaiting_approval: bool,
@@ -105,10 +184,10 @@ impl ToNormalizedEntry for CommandState {
                         exit_status: self
                             .exit_code
                             .map(|code| CommandExitStatus::ExitCode { code }),
-                        output: if self.formatted_output.is_some() {
-                            self.formatted_output.clone()
+                        output: if let Some(formatted_output) = &self.formatted_output {
+                            Some(formatted_output.clone())
                         } else {
-                            build_command_output(Some(&self.stdout), Some(&self.stderr))
+                            build_command_output(self.stdout.display(), self.stderr.display())
                         },
                     }),
                     category: CommandCategory::from_command(&self.command),
@@ -121,6 +200,39 @@ impl ToNormalizedEntry for CommandState {
             })
             .ok(),
         }
+    }
+}
+
+impl CommandState {
+    fn set_formatted_output(&mut self, output: Option<String>) {
+        self.formatted_output = output.map(|output| {
+            BoundedOutput::from_str(&output)
+                .display()
+                .unwrap_or_default()
+        });
+        self.pending_output_bytes = 0;
+    }
+
+    fn push_stdout(&mut self, chunk: &str) -> bool {
+        self.stdout.push_str(chunk);
+        self.note_output_delta(chunk.len())
+    }
+
+    fn push_stream_lossy(&mut self, stream: ExecOutputStream, chunk: &[u8]) -> bool {
+        match stream {
+            ExecOutputStream::Stdout => self.stdout.push_lossy(chunk),
+            ExecOutputStream::Stderr => self.stderr.push_lossy(chunk),
+        }
+        self.note_output_delta(chunk.len())
+    }
+
+    fn note_output_delta(&mut self, bytes: usize) -> bool {
+        self.pending_output_bytes = self.pending_output_bytes.saturating_add(bytes);
+        self.pending_output_bytes >= COMMAND_OUTPUT_UPDATE_BYTES
+    }
+
+    fn mark_output_flushed(&mut self) {
+        self.pending_output_bytes = 0;
     }
 }
 
@@ -551,6 +663,15 @@ impl LogState {
                 call_id,
                 ..Default::default()
             })
+    }
+
+    fn flush_open_commands(&mut self, msg_store: &Arc<MsgStore>) {
+        for command_state in self.commands.values_mut() {
+            command_state.mark_output_flushed();
+            if let Some(index) = command_state.index {
+                replace_normalized_entry(msg_store, index, command_state.to_normalized_entry());
+            }
+        }
     }
 }
 
@@ -1068,7 +1189,7 @@ fn handle_direct_item_completed(
             ..
         } => {
             if let Some(mut command_state) = state.commands.remove(&id) {
-                command_state.formatted_output = aggregated_output;
+                command_state.set_formatted_output(aggregated_output);
                 command_state.exit_code = exit_code;
                 command_state.awaiting_approval = false;
                 command_state.status = app_command_status_to_tool_status(&status);
@@ -1292,6 +1413,7 @@ fn handle_direct_notification(
     msg_store: &Arc<MsgStore>,
     entry_index: &EntryIndexProvider,
     worktree_path: &str,
+    suppress_command_delta_updates: bool,
 ) -> bool {
     match notification {
         ServerNotification::ThreadStarted(n) => {
@@ -1336,8 +1458,12 @@ fn handle_direct_notification(
             CommandExecutionOutputDeltaNotification { item_id, delta, .. },
         ) => {
             if let Some(command_state) = state.commands.get_mut(&item_id) {
-                command_state.stdout.push_str(&delta);
-                if let Some(index) = command_state.index {
+                let should_update = command_state.push_stdout(&delta);
+                if !suppress_command_delta_updates
+                    && should_update
+                    && let Some(index) = command_state.index
+                {
+                    command_state.mark_output_flushed();
                     replace_normalized_entry(msg_store, index, command_state.to_normalized_entry());
                 }
             }
@@ -1495,6 +1621,10 @@ pub fn normalize_logs(
     let worktree_path_str = worktree_path.to_string_lossy().to_string();
     let h2 = tokio::spawn(async move {
         let mut state = LogState::new(entry_index.clone());
+        let suppress_command_delta_updates = msg_store
+            .get_history()
+            .iter()
+            .any(|msg| matches!(msg, LogMsg::Finished));
         let mut stdout_lines = msg_store.stdout_lines_stream();
 
         while let Some(Ok(line)) = stdout_lines.next().await {
@@ -1560,6 +1690,7 @@ pub fn normalize_logs(
                     &msg_store,
                     &entry_index,
                     &worktree_path_str,
+                    suppress_command_delta_updates,
                 ) {
                     continue;
                 }
@@ -1767,9 +1898,10 @@ pub fn normalize_logs(
                         CommandState {
                             index: None,
                             command: command_text,
-                            stdout: String::new(),
-                            stderr: String::new(),
+                            stdout: BoundedOutput::default(),
+                            stderr: BoundedOutput::default(),
                             formatted_output: None,
+                            pending_output_bytes: 0,
                             status: ToolStatus::Created,
                             exit_code: None,
                             awaiting_approval: false,
@@ -1790,18 +1922,18 @@ pub fn normalize_logs(
                     chunk,
                 }) => {
                     if let Some(command_state) = state.commands.get_mut(&call_id) {
-                        let chunk = String::from_utf8_lossy(&chunk);
                         if chunk.is_empty() {
                             continue;
                         }
-                        match stream {
-                            ExecOutputStream::Stdout => command_state.stdout.push_str(&chunk),
-                            ExecOutputStream::Stderr => command_state.stderr.push_str(&chunk),
+                        let should_update = command_state.push_stream_lossy(stream, &chunk);
+                        if suppress_command_delta_updates || !should_update {
+                            continue;
                         }
                         let Some(index) = command_state.index else {
                             tracing::error!("missing entry index for existing command state");
                             continue;
                         };
+                        command_state.mark_output_flushed();
                         replace_normalized_entry(
                             &msg_store,
                             index,
@@ -1827,7 +1959,7 @@ pub fn normalize_logs(
                     ..
                 }) => {
                     if let Some(mut command_state) = state.commands.remove(&call_id) {
-                        command_state.formatted_output = Some(formatted_output);
+                        command_state.set_formatted_output(Some(formatted_output));
                         command_state.exit_code = Some(exit_code);
                         command_state.awaiting_approval = false;
                         command_state.status = if exit_code == 0 {
@@ -2429,6 +2561,8 @@ pub fn normalize_logs(
                 | EventMsg::PatchApplyUpdated(..) => {}
             }
         }
+
+        state.flush_open_commands(&msg_store);
     });
 
     vec![h1, h2]
@@ -2501,15 +2635,15 @@ fn handle_model_params(
     upsert_normalized_entry(msg_store, index, entry, is_new);
 }
 
-fn build_command_output(stdout: Option<&str>, stderr: Option<&str>) -> Option<String> {
+fn build_command_output(stdout: Option<String>, stderr: Option<String>) -> Option<String> {
     let mut sections = Vec::new();
-    if let Some(out) = stdout {
+    if let Some(out) = stdout.as_deref() {
         let cleaned = out.trim();
         if !cleaned.is_empty() {
             sections.push(format!("stdout:\n{cleaned}"));
         }
     }
-    if let Some(err) = stderr {
+    if let Some(err) = stderr.as_deref() {
         let cleaned = err.trim();
         if !cleaned.is_empty() {
             sections.push(format!("stderr:\n{cleaned}"));
@@ -2772,6 +2906,131 @@ mod tests {
         .to_string()
     }
 
+    #[test]
+    fn bounded_output_amortizes_streaming_truncation() {
+        let mut output = BoundedOutput::default();
+
+        output.push_str(&format!(
+            "dropped-prefix-{}",
+            "a".repeat(COMMAND_OUTPUT_TAIL_BYTES)
+        ));
+        output.push_str("-tail-marker");
+
+        assert!(output.tail.len() > COMMAND_OUTPUT_TAIL_BYTES);
+        assert_eq!(output.omitted_bytes, 0);
+
+        let display = output.display().expect("display output");
+        assert!(display.contains("bytes omitted"));
+        assert!(display.contains("tail-marker"));
+        assert!(!display.contains("dropped-prefix"));
+        assert!(display.len() <= COMMAND_OUTPUT_TAIL_BYTES + 128);
+
+        output.push_str(&"b".repeat(COMMAND_OUTPUT_TAIL_BYTES));
+
+        assert!(output.tail.len() <= COMMAND_OUTPUT_TAIL_BYTES);
+        assert!(output.omitted_bytes > COMMAND_OUTPUT_TAIL_BYTES);
+        assert!(
+            output
+                .display()
+                .expect("display output")
+                .ends_with(&"b".repeat(COMMAND_OUTPUT_TAIL_BYTES))
+        );
+    }
+
+    #[test]
+    fn bounded_output_from_str_keeps_only_tail_suffix() {
+        let input = format!(
+            "dropped-prefix-{}-tail-marker",
+            "a".repeat(COMMAND_OUTPUT_TAIL_BYTES * 2)
+        );
+
+        let output = BoundedOutput::from_str(&input);
+
+        assert!(output.tail.len() <= COMMAND_OUTPUT_TAIL_BYTES);
+        assert_eq!(output.omitted_bytes + output.tail.len(), input.len());
+
+        let display = output.display().expect("display output");
+        assert!(display.contains("bytes omitted"));
+        assert!(display.contains("tail-marker"));
+        assert!(!display.contains("dropped-prefix"));
+        assert!(display.len() <= COMMAND_OUTPUT_TAIL_BYTES + 128);
+    }
+
+    #[test]
+    fn completed_command_output_is_bounded_once() {
+        let mut command_state = CommandState {
+            index: None,
+            command: "rg noisy".to_string(),
+            stdout: BoundedOutput::default(),
+            stderr: BoundedOutput::default(),
+            formatted_output: None,
+            pending_output_bytes: 0,
+            status: ToolStatus::Success,
+            exit_code: Some(0),
+            awaiting_approval: false,
+            call_id: "cmd-large-output".to_string(),
+        };
+        let formatted_output = format!(
+            "dropped-prefix-{}-tail-marker",
+            "a".repeat(COMMAND_OUTPUT_TAIL_BYTES * 2)
+        );
+        let expected_omitted_bytes = formatted_output.len() - COMMAND_OUTPUT_TAIL_BYTES;
+
+        command_state.set_formatted_output(Some(formatted_output));
+        let entry = command_state.to_normalized_entry();
+
+        match &entry.entry_type {
+            NormalizedEntryType::ToolUse {
+                action_type:
+                    ActionType::CommandRun {
+                        result: Some(result),
+                        ..
+                    },
+                ..
+            } => {
+                let output = result.output.as_deref().expect("command output");
+                assert!(output.starts_with(&format!("[{expected_omitted_bytes} bytes omitted;")));
+                assert!(output.contains("tail-marker"));
+                assert!(!output.contains("dropped-prefix"));
+                assert!(output.len() <= COMMAND_OUTPUT_TAIL_BYTES + 128);
+            }
+            other => panic!("unexpected command entry: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn completed_command_preserves_explicit_empty_formatted_output() {
+        let mut command_state = CommandState {
+            index: None,
+            command: "printf hidden".to_string(),
+            stdout: BoundedOutput::from_str("stdout should not be used"),
+            stderr: BoundedOutput::default(),
+            formatted_output: None,
+            pending_output_bytes: 0,
+            status: ToolStatus::Success,
+            exit_code: Some(0),
+            awaiting_approval: false,
+            call_id: "cmd-empty-output".to_string(),
+        };
+
+        command_state.set_formatted_output(Some(String::new()));
+        let entry = command_state.to_normalized_entry();
+
+        match &entry.entry_type {
+            NormalizedEntryType::ToolUse {
+                action_type:
+                    ActionType::CommandRun {
+                        result: Some(result),
+                        ..
+                    },
+                ..
+            } => {
+                assert_eq!(result.output.as_deref(), Some(""));
+            }
+            other => panic!("unexpected command entry: {other:?}"),
+        }
+    }
+
     #[tokio::test]
     async fn preserves_direct_command_denial_without_item_started() {
         let call_id = "cmd-1";
@@ -2923,6 +3182,81 @@ mod tests {
                 );
             }
             other => panic!("unexpected dynamic tool entry: {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn bounds_historical_command_output_without_completion() {
+        let call_id = "cmd-large-output";
+        let mut lines = vec![
+            json!({
+                "jsonrpc": "2.0",
+                "method": "item/started",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "item": {
+                        "type": "commandExecution",
+                        "id": call_id,
+                        "command": "rg noisy",
+                        "cwd": "/tmp/test-worktree",
+                        "processId": null,
+                        "status": "inProgress",
+                        "commandActions": [],
+                        "aggregatedOutput": null,
+                        "exitCode": null,
+                        "durationMs": null
+                    }
+                }
+            })
+            .to_string(),
+            json!({
+                "jsonrpc": "2.0",
+                "method": "item/commandExecution/outputDelta",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "itemId": call_id,
+                    "delta": format!("prefix-{}", "a".repeat(COMMAND_OUTPUT_TAIL_BYTES))
+                }
+            })
+            .to_string(),
+            json!({
+                "jsonrpc": "2.0",
+                "method": "item/commandExecution/outputDelta",
+                "params": {
+                    "threadId": "thread-1",
+                    "turnId": "turn-1",
+                    "itemId": call_id,
+                    "delta": "-tail-marker"
+                }
+            })
+            .to_string(),
+        ];
+
+        let entries = normalize_lines(&lines).await;
+        lines.clear();
+
+        let command = tool_use(&entries, "bash");
+        match &command.entry_type {
+            NormalizedEntryType::ToolUse {
+                action_type:
+                    ActionType::CommandRun {
+                        command,
+                        result: Some(result),
+                        ..
+                    },
+                status: ToolStatus::Created,
+                ..
+            } => {
+                assert_eq!(command, "rg noisy");
+                let output = result.output.as_deref().expect("command output");
+                assert!(output.contains("bytes omitted"));
+                assert!(output.contains("tail-marker"));
+                assert!(!output.contains("prefix-"));
+                assert!(output.len() <= COMMAND_OUTPUT_TAIL_BYTES + 128);
+            }
+            other => panic!("unexpected command entry: {other:?}"),
         }
     }
 }

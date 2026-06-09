@@ -157,8 +157,6 @@ fn generate_types_content() -> String {
         server::routes::workspaces::pr::PrCommentsResponse::decl(),
         server::routes::workspaces::pr::GetPrCommentsError::decl(),
         server::routes::workspaces::pr::GetPrCommentsQuery::decl(),
-        server::routes::workspaces::pr::SquashMergePrRequest::decl(),
-        server::routes::workspaces::pr::SquashMergeError::decl(),
         db::models::requests::CreateAndStartWorkspaceRequest::decl(),
         db::models::requests::CreateAndStartWorkspaceResponse::decl(),
         git_host::UnifiedPrComment::decl(),

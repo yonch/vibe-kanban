@@ -350,7 +350,7 @@ export type CreateWorkspaceApiRequest = { name: string | null, idempotency_key: 
 
 export type LinkedIssueInfo = { remote_project_id: string, issue_id: string, };
 
-export type CreatePrApiRequest = { title: string, body: string | null, target_branch: string | null, draft: boolean | null, repo_id: string, auto_generate_description: boolean, };
+export type CreatePrApiRequest = { title: string, body: string | null, target_branch: string | null, draft: boolean | null, repo_id: string, auto_generate_description: boolean, squash_merge_after_description: boolean, };
 
 export type AttachmentResponse = { id: string, file_path: string, original_name: string, mime_type: string | null, size_bytes: bigint, hash: string, created_at: string, updated_at: string, };
 
@@ -393,10 +393,6 @@ export type PrCommentsResponse = { comments: Array<UnifiedPrComment>, };
 export type GetPrCommentsError = { "type": "no_pr_attached" } | { "type": "cli_not_installed", provider: ProviderKind, } | { "type": "cli_not_logged_in", provider: ProviderKind, };
 
 export type GetPrCommentsQuery = { repo_id: string, };
-
-export type SquashMergePrRequest = { repo_id: string, };
-
-export type SquashMergeError = { "type": "no_pr_attached" } | { "type": "pr_not_open" } | { "type": "unpushed_commits" } | { "type": "cli_not_installed", provider: ProviderKind, } | { "type": "cli_not_logged_in", provider: ProviderKind, } | { "type": "unsupported_provider" } | { "type": "merge_failed", message: string, };
 
 export type CreateAndStartWorkspaceRequest = { name: string | null, repos: Array<WorkspaceRepoInput>, linked_issue: LinkedIssueInfo | null, executor_config: ExecutorConfig, prompt: string, attachment_ids: Array<string> | null, idempotency_key: string | null, };
 

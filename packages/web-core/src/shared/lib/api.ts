@@ -87,8 +87,6 @@ import {
   CreateWorkspaceFromPrBody,
   CreateWorkspaceFromPrResponse,
   CreateFromPrError,
-  SquashMergePrRequest,
-  SquashMergeError,
   CreateAndStartWorkspaceRequest,
   CreateAndStartWorkspaceResponse,
   RelayPairedClient,
@@ -691,20 +689,6 @@ export const workspacesApi = {
       }
     );
     return handleApiResponseAsResult<AttachPrResponse, PrError>(response);
-  },
-
-  squashMergePR: async (
-    workspaceId: string,
-    data: SquashMergePrRequest
-  ): Promise<Result<string, SquashMergeError>> => {
-    const response = await makeRequest(
-      `/api/workspaces/${workspaceId}/pull-requests/squash-merge`,
-      {
-        method: 'POST',
-        body: JSON.stringify(data),
-      }
-    );
-    return handleApiResponseAsResult<string, SquashMergeError>(response);
   },
 
   startDevServer: async (workspaceId: string): Promise<ExecutionProcess[]> => {

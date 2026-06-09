@@ -8,7 +8,6 @@ use async_trait::async_trait;
 use backon::{ExponentialBuilder, Retryable};
 pub use cli::AzCli;
 use cli::{AzCliError, AzureRepoInfo};
-use db::models::merge::PullRequestInfo;
 use tokio::task;
 use tracing::info;
 
@@ -246,15 +245,6 @@ impl GitHostProvider for AzureDevOpsProvider {
             );
         })
         .await
-    }
-
-    async fn squash_merge_pr(
-        &self,
-        _repo_path: &Path,
-        _remote_url: &str,
-        _pr_number: i64,
-    ) -> Result<PullRequestInfo, GitHostError> {
-        Err(GitHostError::UnsupportedProvider)
     }
 
     async fn list_open_prs(

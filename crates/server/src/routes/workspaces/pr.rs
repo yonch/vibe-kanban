@@ -95,33 +95,42 @@ pub struct GetPrCommentsQuery {
     pub repo_id: Uuid,
 }
 
-async fn trigger_pr_description_follow_up(
+async fn trigger_pr_follow_up(
     deployment: &DeploymentImpl,
     workspace: &Workspace,
     pr_number: i64,
     pr_url: &str,
+    auto_generate_description: bool,
     squash_merge_after_description: bool,
 ) -> Result<(), ApiError> {
-    // Get the custom prompt from config, or use default
-    let config = deployment.config().read().await;
-    let prompt_template = config
-        .pr_auto_description_prompt
-        .as_deref()
-        .unwrap_or(DEFAULT_PR_DESCRIPTION_PROMPT);
+    let mut prompt = String::new();
 
-    // Replace placeholders in prompt
-    let mut prompt = prompt_template
-        .replace("{pr_number}", &pr_number.to_string())
-        .replace("{pr_url}", pr_url);
+    if auto_generate_description {
+        let config = deployment.config().read().await;
+        let prompt_template = config
+            .pr_auto_description_prompt
+            .as_deref()
+            .unwrap_or(DEFAULT_PR_DESCRIPTION_PROMPT);
 
-    if squash_merge_after_description {
-        prompt.push_str(&format!(
-            "\n\nAfter successfully updating the PR title and description, squash-merge PR #{} ({}). Use the appropriate CLI tool for the provider. Do not squash-merge the PR until after the metadata update is complete.",
-            pr_number, pr_url
-        ));
+        prompt = prompt_template
+            .replace("{pr_number}", &pr_number.to_string())
+            .replace("{pr_url}", pr_url);
     }
 
-    drop(config); // Release the lock before async operations
+    if squash_merge_after_description {
+        if !prompt.is_empty() {
+            prompt.push_str("\n\n");
+            prompt.push_str(&format!(
+                "After successfully updating the PR title and description, squash-merge PR #{} ({}). Use the appropriate CLI tool for the provider. Do not squash-merge the PR until after the metadata update is complete.",
+                pr_number, pr_url
+            ));
+        } else {
+            prompt = format!(
+                "Squash-merge PR #{} ({}). Use the appropriate CLI tool for the provider. Do not update the PR title or description.",
+                pr_number, pr_url
+            );
+        }
+    }
 
     // Get or create a session for this follow-up
     let session =
@@ -359,17 +368,18 @@ pub async fn create_pr(
 
             // Trigger auto-description follow-up if enabled
             if (request.auto_generate_description || request.squash_merge_after_description)
-                && let Err(e) = trigger_pr_description_follow_up(
+                && let Err(e) = trigger_pr_follow_up(
                     &deployment,
                     &workspace,
                     pr_info.number,
                     &pr_info.url,
+                    request.auto_generate_description,
                     request.squash_merge_after_description,
                 )
                 .await
             {
                 tracing::warn!(
-                    "Failed to trigger PR description follow-up for attempt {}: {}",
+                    "Failed to trigger PR follow-up for attempt {}: {}",
                     workspace.id,
                     e
                 );

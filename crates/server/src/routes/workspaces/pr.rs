@@ -47,6 +47,8 @@ pub struct CreatePrApiRequest {
     pub repo_id: Uuid,
     #[serde(default)]
     pub auto_generate_description: bool,
+    #[serde(default)]
+    pub squash_merge_after_description: bool,
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]
@@ -98,6 +100,7 @@ async fn trigger_pr_description_follow_up(
     workspace: &Workspace,
     pr_number: i64,
     pr_url: &str,
+    squash_merge_after_description: bool,
 ) -> Result<(), ApiError> {
     // Get the custom prompt from config, or use default
     let config = deployment.config().read().await;
@@ -107,9 +110,16 @@ async fn trigger_pr_description_follow_up(
         .unwrap_or(DEFAULT_PR_DESCRIPTION_PROMPT);
 
     // Replace placeholders in prompt
-    let prompt = prompt_template
+    let mut prompt = prompt_template
         .replace("{pr_number}", &pr_number.to_string())
         .replace("{pr_url}", pr_url);
+
+    if squash_merge_after_description {
+        prompt.push_str(&format!(
+            "\n\nAfter successfully updating the PR title and description, squash-merge PR #{} ({}). Use the appropriate CLI tool for the provider. Do not squash-merge the PR until after the metadata update is complete.",
+            pr_number, pr_url
+        ));
+    }
 
     drop(config); // Release the lock before async operations
 
@@ -348,12 +358,13 @@ pub async fn create_pr(
                 .await;
 
             // Trigger auto-description follow-up if enabled
-            if request.auto_generate_description
+            if (request.auto_generate_description || request.squash_merge_after_description)
                 && let Err(e) = trigger_pr_description_follow_up(
                     &deployment,
                     &workspace,
                     pr_info.number,
                     &pr_info.url,
+                    request.squash_merge_after_description,
                 )
                 .await
             {

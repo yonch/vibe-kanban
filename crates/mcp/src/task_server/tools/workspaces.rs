@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use db::models::{requests::UpdateWorkspace, workspace::Workspace};
 use rmcp::{
@@ -301,17 +301,9 @@ impl McpServer {
 
         let timeout_secs = timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS);
         let url = self.url("/api/execution-processes/wait");
-        let payload = serde_json::json!({
-            "execution_ids": execution_ids,
-            "timeout_seconds": timeout_secs,
-        });
-
-        // Use a per-request timeout slightly longer than the server-side timeout
-        // to allow the server to return its own timeout response cleanly.
-        let http_timeout = Duration::from_secs(timeout_secs.saturating_add(30));
 
         let response: McpWaitExecutionResponse = match self
-            .send_wait_execution_json(&url, &payload, http_timeout)
+            .send_wait_execution_json(&url, &execution_ids, timeout_secs)
             .await
         {
             Ok(r) => r,
@@ -326,16 +318,36 @@ impl McpServer {
     async fn send_wait_execution_json(
         &self,
         url: &str,
-        payload: &serde_json::Value,
-        http_timeout: Duration,
+        execution_ids: &[Uuid],
+        timeout_secs: u64,
     ) -> Result<McpWaitExecutionResponse, ToolError> {
         let mut last_error = None;
+        let started_at = Instant::now();
+        let wait_budget = Duration::from_secs(timeout_secs);
+        let http_budget = Duration::from_secs(timeout_secs.saturating_add(30));
 
         for attempt in 1..=WAIT_EXECUTION_HTTP_RETRIES {
+            let remaining_timeout_secs = if attempt == 1 {
+                timeout_secs
+            } else if let Some(remaining) = remaining_wait_execution_secs(started_at, wait_budget) {
+                remaining
+            } else {
+                return Err(last_error.unwrap_or_else(|| {
+                    ToolError::message("wait_execution retry budget exhausted")
+                }));
+            };
+
+            let http_timeout = remaining_wait_execution_duration(started_at, http_budget)
+                .unwrap_or_else(|| Duration::from_secs(1));
+            let payload = serde_json::json!({
+                "execution_ids": execution_ids,
+                "timeout_seconds": remaining_timeout_secs,
+            });
+
             let response = self
                 .client
                 .post(url)
-                .json(payload)
+                .json(&payload)
                 .timeout(http_timeout)
                 .send()
                 .await;
@@ -398,4 +410,20 @@ impl McpServer {
 
 fn wait_execution_retry_delay(attempt: usize) -> Duration {
     Duration::from_millis(250 * attempt as u64)
+}
+
+fn remaining_wait_execution_secs(started_at: Instant, budget: Duration) -> Option<u64> {
+    let remaining = remaining_wait_execution_duration(started_at, budget)?;
+    let secs = remaining.as_secs();
+    let rounded_up = if remaining.subsec_nanos() > 0 {
+        secs.saturating_add(1)
+    } else {
+        secs
+    };
+    (rounded_up > 0).then_some(rounded_up)
+}
+
+fn remaining_wait_execution_duration(started_at: Instant, budget: Duration) -> Option<Duration> {
+    let remaining = budget.checked_sub(started_at.elapsed())?;
+    (!remaining.is_zero()).then_some(remaining)
 }

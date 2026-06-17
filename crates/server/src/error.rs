@@ -79,6 +79,8 @@ pub enum ApiError {
     Forbidden(String),
     #[error("Too many requests: {0}")]
     TooManyRequests(String),
+    #[error("Service unavailable: {0}")]
+    ServiceUnavailable(String),
     #[error("Payload too large")]
     PayloadTooLarge,
     #[error("Bad gateway: {0}")]
@@ -467,6 +469,11 @@ impl IntoResponse for ApiError {
             ApiError::TooManyRequests(msg) => ErrorInfo::with_status(
                 StatusCode::TOO_MANY_REQUESTS,
                 "TooManyRequests",
+                msg.clone(),
+            ),
+            ApiError::ServiceUnavailable(msg) => ErrorInfo::with_status(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "ServiceUnavailable",
                 msg.clone(),
             ),
             ApiError::PayloadTooLarge => ErrorInfo::with_status(

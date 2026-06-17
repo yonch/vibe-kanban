@@ -8,9 +8,10 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::McpServer;
+use super::{ApiResponseEnvelope, McpServer, ToolError};
 
 const DEFAULT_TIMEOUT_SECONDS: u64 = 1800;
+const WAIT_EXECUTION_HTTP_RETRIES: usize = 3;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct McpListWorkspacesRequest {
@@ -310,7 +311,7 @@ impl McpServer {
         let http_timeout = Duration::from_secs(timeout_secs.saturating_add(30));
 
         let response: McpWaitExecutionResponse = match self
-            .send_json(self.client.post(&url).json(&payload).timeout(http_timeout))
+            .send_wait_execution_json(&url, &payload, http_timeout)
             .await
         {
             Ok(r) => r,
@@ -319,4 +320,82 @@ impl McpServer {
 
         McpServer::success(&response)
     }
+}
+
+impl McpServer {
+    async fn send_wait_execution_json(
+        &self,
+        url: &str,
+        payload: &serde_json::Value,
+        http_timeout: Duration,
+    ) -> Result<McpWaitExecutionResponse, ToolError> {
+        let mut last_error = None;
+
+        for attempt in 1..=WAIT_EXECUTION_HTTP_RETRIES {
+            let response = self
+                .client
+                .post(url)
+                .json(payload)
+                .timeout(http_timeout)
+                .send()
+                .await;
+
+            let response = match response {
+                Ok(response) => response,
+                Err(error) if attempt < WAIT_EXECUTION_HTTP_RETRIES => {
+                    last_error = Some(ToolError::new(
+                        "Failed to connect to VK API",
+                        Some(error.to_string()),
+                    ));
+                    tokio::time::sleep(wait_execution_retry_delay(attempt)).await;
+                    continue;
+                }
+                Err(error) => {
+                    return Err(ToolError::new(
+                        "Failed to connect to VK API",
+                        Some(error.to_string()),
+                    ));
+                }
+            };
+
+            let status = response.status();
+            if !status.is_success() {
+                let body = response.text().await.unwrap_or_default();
+                let error = ToolError::new(
+                    format!("VK API returned error status: {status}"),
+                    (!body.is_empty()).then_some(body),
+                );
+
+                if status.is_server_error() && attempt < WAIT_EXECUTION_HTTP_RETRIES {
+                    last_error = Some(error);
+                    tokio::time::sleep(wait_execution_retry_delay(attempt)).await;
+                    continue;
+                }
+
+                return Err(error);
+            }
+
+            let api_response = response
+                .json::<ApiResponseEnvelope<McpWaitExecutionResponse>>()
+                .await
+                .map_err(|error| {
+                    ToolError::new("Failed to parse VK API response", Some(error.to_string()))
+                })?;
+
+            if !api_response.success {
+                let msg = api_response.message.as_deref().unwrap_or("Unknown error");
+                return Err(ToolError::new("VK API returned error", Some(msg)));
+            }
+
+            return api_response
+                .data
+                .ok_or_else(|| ToolError::message("VK API response missing data field"));
+        }
+
+        Err(last_error.unwrap_or_else(|| ToolError::message("VK API request failed")))
+    }
+}
+
+fn wait_execution_retry_delay(attempt: usize) -> Duration {
+    Duration::from_millis(250 * attempt as u64)
 }

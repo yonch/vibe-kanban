@@ -16,6 +16,7 @@ use deployment::Deployment;
 use futures_util::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use services::services::container::ContainerService;
+use sqlx::SqlitePool;
 use utils::{log_msg::LogMsg, response::ApiResponse};
 use uuid::Uuid;
 
@@ -328,6 +329,66 @@ fn coding_agent_turn_accepted_by_agent(turn: Option<&CodingAgentTurn>) -> bool {
     turn.is_some_and(|turn| turn.agent_session_id.is_some())
 }
 
+async fn completed_wait_response(
+    pool: &SqlitePool,
+    id: Uuid,
+) -> Result<Option<WaitForExecutionsResponse>, sqlx::Error> {
+    let Some(ep) = ExecutionProcess::find_by_id(pool, id).await? else {
+        return Ok(None);
+    };
+
+    if ep.status == ExecutionProcessStatus::Running {
+        return Ok(None);
+    }
+
+    let status = match ep.status {
+        ExecutionProcessStatus::Completed => "completed",
+        ExecutionProcessStatus::Failed => "failed",
+        ExecutionProcessStatus::Killed => "killed",
+        ExecutionProcessStatus::Running => unreachable!(),
+    };
+
+    let turn = CodingAgentTurn::find_by_execution_process_id(pool, ep.id).await?;
+    let output = turn.as_ref().and_then(|turn| turn.summary.clone());
+    let accepted_by_agent = coding_agent_turn_accepted_by_agent(turn.as_ref());
+
+    Ok(Some(WaitForExecutionsResponse {
+        completed_execution_id: ep.id,
+        session_id: ep.session_id,
+        status: status.to_string(),
+        completed_at: ep.completed_at,
+        output,
+        accepted_by_agent,
+    }))
+}
+
+async fn timeout_wait_response(
+    pool: &SqlitePool,
+    first_id: Uuid,
+) -> Result<WaitForExecutionsResponse, sqlx::Error> {
+    let first_execution = ExecutionProcess::find_by_id(pool, first_id).await?;
+    let session_id = first_execution
+        .as_ref()
+        .map(|ep| ep.session_id)
+        .unwrap_or(first_id);
+    let accepted_by_agent = match first_execution {
+        Some(ep) => {
+            let turn = CodingAgentTurn::find_by_execution_process_id(pool, ep.id).await?;
+            coding_agent_turn_accepted_by_agent(turn.as_ref())
+        }
+        None => false,
+    };
+
+    Ok(WaitForExecutionsResponse {
+        completed_execution_id: first_id,
+        session_id,
+        status: "timeout".to_string(),
+        completed_at: None,
+        output: None,
+        accepted_by_agent,
+    })
+}
+
 /// Long-poll endpoint: holds the connection open until any of the requested executions
 /// reaches a terminal state (not running) or the timeout elapses.
 async fn wait_for_executions(
@@ -346,61 +407,39 @@ async fn wait_for_executions(
     let deadline =
         tokio::time::Instant::now() + Duration::from_secs(request.timeout_seconds.min(3600));
     let poll_interval = Duration::from_millis(500);
+    let mut last_poll_error: Option<sqlx::Error> = None;
 
     loop {
         for id in &request.execution_ids {
-            if let Some(ep) = ExecutionProcess::find_by_id(pool, *id).await?
-                && ep.status != ExecutionProcessStatus::Running
-            {
-                let status = match ep.status {
-                    ExecutionProcessStatus::Completed => "completed",
-                    ExecutionProcessStatus::Failed => "failed",
-                    ExecutionProcessStatus::Killed => "killed",
-                    ExecutionProcessStatus::Running => unreachable!(),
-                };
-
-                let turn = CodingAgentTurn::find_by_execution_process_id(pool, ep.id).await?;
-                let output = turn.as_ref().and_then(|turn| turn.summary.clone());
-                let accepted_by_agent = coding_agent_turn_accepted_by_agent(turn.as_ref());
-
-                return Ok(ResponseJson(ApiResponse::success(
-                    WaitForExecutionsResponse {
-                        completed_execution_id: ep.id,
-                        session_id: ep.session_id,
-                        status: status.to_string(),
-                        completed_at: ep.completed_at,
-                        output,
-                        accepted_by_agent,
-                    },
-                )));
+            match completed_wait_response(pool, *id).await {
+                Ok(Some(response)) => return Ok(ResponseJson(ApiResponse::success(response))),
+                Ok(None) => last_poll_error = None,
+                Err(error) => {
+                    tracing::warn!(
+                        execution_id = %id,
+                        error = ?error,
+                        "wait_for_executions poll failed; retrying until deadline"
+                    );
+                    last_poll_error = Some(error);
+                }
             }
         }
 
         if tokio::time::Instant::now() + poll_interval > deadline {
             let first_id = request.execution_ids[0];
-            let first_execution = ExecutionProcess::find_by_id(pool, first_id).await?;
-            let session_id = first_execution
-                .as_ref()
-                .map(|ep| ep.session_id)
-                .unwrap_or(first_id);
-            let accepted_by_agent = match first_execution {
-                Some(ep) => {
-                    let turn = CodingAgentTurn::find_by_execution_process_id(pool, ep.id).await?;
-                    coding_agent_turn_accepted_by_agent(turn.as_ref())
+            return match timeout_wait_response(pool, first_id).await {
+                Ok(response) => Ok(ResponseJson(ApiResponse::success(response))),
+                Err(error) => {
+                    let error = last_poll_error.unwrap_or(error);
+                    tracing::warn!(
+                        error = ?error,
+                        "wait_for_executions deadline reached after database errors"
+                    );
+                    Err(ApiError::ServiceUnavailable(
+                        "Execution status is temporarily unavailable. Please retry.".to_string(),
+                    ))
                 }
-                None => false,
             };
-
-            return Ok(ResponseJson(ApiResponse::success(
-                WaitForExecutionsResponse {
-                    completed_execution_id: first_id,
-                    session_id,
-                    status: "timeout".to_string(),
-                    completed_at: None,
-                    output: None,
-                    accepted_by_agent,
-                },
-            )));
         }
 
         tokio::time::sleep(poll_interval).await;

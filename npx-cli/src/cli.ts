@@ -120,7 +120,7 @@ function showProgress(downloaded: number, total: number): void {
 }
 
 function buildMcpArgs(args: string[]): string[] {
-  return args.length > 0 ? args : ["--mode", "global"];
+  return args.includes("--mode") ? args : [...args, "--mode", "global"];
 }
 
 async function extractAndRun(

@@ -449,6 +449,9 @@ const DiffFileItem = memo(function DiffFileItem({
 
   const handleTouchEnd = useCallback(() => {
     touchStartRef.current = null;
+    window.setTimeout(() => {
+      skipNextLineClickRef.current = false;
+    }, 0);
   }, []);
 
   const options = useMemo(

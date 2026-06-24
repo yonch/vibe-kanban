@@ -1,4 +1,4 @@
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use db::models::{requests::UpdateWorkspace, workspace::Workspace};
 use rmcp::{
@@ -8,9 +8,10 @@ use rmcp::{
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use super::McpServer;
+use super::{ApiResponseEnvelope, McpServer, ToolError};
 
 const DEFAULT_TIMEOUT_SECONDS: u64 = 1800;
+const WAIT_EXECUTION_HTTP_RETRIES: usize = 3;
 
 #[derive(Debug, Deserialize, schemars::JsonSchema)]
 struct McpListWorkspacesRequest {
@@ -300,17 +301,9 @@ impl McpServer {
 
         let timeout_secs = timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS);
         let url = self.url("/api/execution-processes/wait");
-        let payload = serde_json::json!({
-            "execution_ids": execution_ids,
-            "timeout_seconds": timeout_secs,
-        });
-
-        // Use a per-request timeout slightly longer than the server-side timeout
-        // to allow the server to return its own timeout response cleanly.
-        let http_timeout = Duration::from_secs(timeout_secs.saturating_add(30));
 
         let response: McpWaitExecutionResponse = match self
-            .send_json(self.client.post(&url).json(&payload).timeout(http_timeout))
+            .send_wait_execution_json(&url, &execution_ids, timeout_secs)
             .await
         {
             Ok(r) => r,
@@ -318,5 +311,165 @@ impl McpServer {
         };
 
         McpServer::success(&response)
+    }
+}
+
+impl McpServer {
+    async fn send_wait_execution_json(
+        &self,
+        url: &str,
+        execution_ids: &[Uuid],
+        timeout_secs: u64,
+    ) -> Result<McpWaitExecutionResponse, ToolError> {
+        let mut last_error = None;
+        let started_at = Instant::now();
+        let wait_budget = Duration::from_secs(timeout_secs);
+        let http_budget = Duration::from_secs(timeout_secs.saturating_add(30));
+
+        for attempt in 1..=WAIT_EXECUTION_HTTP_RETRIES {
+            let remaining_timeout_secs = if attempt == 1 {
+                timeout_secs
+            } else if let Some(remaining) = remaining_wait_execution_secs(started_at, wait_budget) {
+                remaining
+            } else {
+                return Err(last_error.unwrap_or_else(|| {
+                    ToolError::message("wait_execution retry budget exhausted")
+                }));
+            };
+
+            let http_timeout = remaining_wait_execution_duration(started_at, http_budget)
+                .unwrap_or_else(|| Duration::from_secs(1));
+            let payload = serde_json::json!({
+                "execution_ids": execution_ids,
+                "timeout_seconds": remaining_timeout_secs,
+            });
+
+            let response = self
+                .client
+                .post(url)
+                .json(&payload)
+                .timeout(http_timeout)
+                .send()
+                .await;
+
+            let response = match response {
+                Ok(response) => response,
+                Err(error) if attempt < WAIT_EXECUTION_HTTP_RETRIES => {
+                    last_error = Some(ToolError::new(
+                        "Failed to connect to VK API",
+                        Some(error.to_string()),
+                    ));
+                    tokio::time::sleep(wait_execution_retry_delay(attempt)).await;
+                    continue;
+                }
+                Err(error) => {
+                    return Err(ToolError::new(
+                        "Failed to connect to VK API",
+                        Some(error.to_string()),
+                    ));
+                }
+            };
+
+            let status = response.status();
+            if !status.is_success() {
+                let body = response.text().await.unwrap_or_default();
+                let error = ToolError::new(
+                    format!("VK API returned error status: {status}"),
+                    (!body.is_empty()).then_some(body),
+                );
+
+                if status.is_server_error() && attempt < WAIT_EXECUTION_HTTP_RETRIES {
+                    last_error = Some(error);
+                    tokio::time::sleep(wait_execution_retry_delay(attempt)).await;
+                    continue;
+                }
+
+                return Err(error);
+            }
+
+            let api_response = response
+                .json::<ApiResponseEnvelope<McpWaitExecutionResponse>>()
+                .await
+                .map_err(|error| {
+                    ToolError::new("Failed to parse VK API response", Some(error.to_string()))
+                })?;
+
+            if !api_response.success {
+                let msg = api_response.message.as_deref().unwrap_or("Unknown error");
+                return Err(ToolError::new("VK API returned error", Some(msg)));
+            }
+
+            return api_response
+                .data
+                .ok_or_else(|| ToolError::message("VK API response missing data field"));
+        }
+
+        Err(last_error.unwrap_or_else(|| ToolError::message("VK API request failed")))
+    }
+}
+
+fn wait_execution_retry_delay(attempt: usize) -> Duration {
+    Duration::from_millis(250 * attempt as u64)
+}
+
+fn remaining_wait_execution_secs(started_at: Instant, budget: Duration) -> Option<u64> {
+    let remaining = remaining_wait_execution_duration(started_at, budget)?;
+    let secs = remaining.as_secs();
+    let rounded_up = if remaining.subsec_nanos() > 0 {
+        secs.saturating_add(1)
+    } else {
+        secs
+    };
+    (rounded_up > 0).then_some(rounded_up)
+}
+
+fn remaining_wait_execution_duration(started_at: Instant, budget: Duration) -> Option<Duration> {
+    let remaining = budget.checked_sub(started_at.elapsed())?;
+    (!remaining.is_zero()).then_some(remaining)
+}
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::{
+        remaining_wait_execution_duration, remaining_wait_execution_secs,
+        wait_execution_retry_delay,
+    };
+
+    #[test]
+    fn remaining_wait_execution_duration_returns_none_when_budget_is_exhausted() {
+        let started_at = Instant::now() - Duration::from_secs(2);
+
+        assert_eq!(
+            remaining_wait_execution_duration(started_at, Duration::from_secs(1)),
+            None
+        );
+    }
+
+    #[test]
+    fn remaining_wait_execution_secs_rounds_subsecond_budget_up() {
+        let started_at = Instant::now() - Duration::from_millis(1100);
+
+        assert_eq!(
+            remaining_wait_execution_secs(started_at, Duration::from_secs(2)),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn remaining_wait_execution_secs_saturates_when_rounding_max_budget() {
+        let started_at = Instant::now();
+
+        assert_eq!(
+            remaining_wait_execution_secs(started_at, Duration::new(u64::MAX, 999_999_999)),
+            Some(u64::MAX)
+        );
+    }
+
+    #[test]
+    fn wait_execution_retry_delay_scales_with_attempt() {
+        assert_eq!(wait_execution_retry_delay(1), Duration::from_millis(250));
+        assert_eq!(wait_execution_retry_delay(3), Duration::from_millis(750));
     }
 }

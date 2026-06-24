@@ -427,3 +427,49 @@ fn remaining_wait_execution_duration(started_at: Instant, budget: Duration) -> O
     let remaining = budget.checked_sub(started_at.elapsed())?;
     (!remaining.is_zero()).then_some(remaining)
 }
+
+#[cfg(test)]
+mod tests {
+    use std::time::{Duration, Instant};
+
+    use super::{
+        remaining_wait_execution_duration, remaining_wait_execution_secs,
+        wait_execution_retry_delay,
+    };
+
+    #[test]
+    fn remaining_wait_execution_duration_returns_none_when_budget_is_exhausted() {
+        let started_at = Instant::now() - Duration::from_secs(2);
+
+        assert_eq!(
+            remaining_wait_execution_duration(started_at, Duration::from_secs(1)),
+            None
+        );
+    }
+
+    #[test]
+    fn remaining_wait_execution_secs_rounds_subsecond_budget_up() {
+        let started_at = Instant::now() - Duration::from_millis(1100);
+
+        assert_eq!(
+            remaining_wait_execution_secs(started_at, Duration::from_secs(2)),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn remaining_wait_execution_secs_saturates_when_rounding_max_budget() {
+        let started_at = Instant::now();
+
+        assert_eq!(
+            remaining_wait_execution_secs(started_at, Duration::new(u64::MAX, 999_999_999)),
+            Some(u64::MAX)
+        );
+    }
+
+    #[test]
+    fn wait_execution_retry_delay_scales_with_attempt() {
+        assert_eq!(wait_execution_retry_delay(1), Duration::from_millis(250));
+        assert_eq!(wait_execution_retry_delay(3), Duration::from_millis(750));
+    }
+}

@@ -1,4 +1,12 @@
-import { memo, useEffect, useCallback, useRef, useState, useMemo } from 'react';
+import {
+  memo,
+  useEffect,
+  useCallback,
+  useRef,
+  useState,
+  useMemo,
+  type TouchEvent,
+} from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   CaretDownIcon,
@@ -85,10 +93,18 @@ function shouldAutoCollapse(diff: Diff): boolean {
 
 const IS_MOBILE = isRealMobileDevice();
 const NOOP = () => {};
+const TOUCH_SCROLL_THRESHOLD_PX = 8;
 
 const PIERRE_DIFFS_THEME_CSS = `
   :host {
     position: relative;
+    touch-action: pan-x pan-y;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  [data-code] {
+    touch-action: pan-x pan-y;
+    -webkit-overflow-scrolling: touch;
   }
 
   [data-diffs-header] {
@@ -339,6 +355,8 @@ const DiffFileItem = memo(function DiffFileItem({
 
   const { comments, drafts, setDraft, addComment } = useReview();
   const draftsRef = useRef(drafts);
+  const touchStartRef = useRef<{ x: number; y: number } | null>(null);
+  const skipNextLineClickRef = useRef(false);
   draftsRef.current = drafts;
 
   const showGitHubComments = useShowGitHubComments();
@@ -385,6 +403,11 @@ const DiffFileItem = memo(function DiffFileItem({
 
   const handleLineClick = useCallback(
     (props: { lineNumber: number; annotationSide: AnnotationSide }) => {
+      if (skipNextLineClickRef.current) {
+        skipNextLineClickRef.current = false;
+        return;
+      }
+
       const { lineNumber, annotationSide } = props;
       const splitSide = mapAnnotationSideToSplitSide(annotationSide);
       const widgetKey = `${filePath}-${splitSide}-${lineNumber}`;
@@ -402,6 +425,32 @@ const DiffFileItem = memo(function DiffFileItem({
     [filePath, diff, setDraft]
   );
 
+  const handleTouchStart = useCallback((event: TouchEvent<HTMLDivElement>) => {
+    const touch = event.touches[0];
+    if (!touch) return;
+    touchStartRef.current = { x: touch.clientX, y: touch.clientY };
+    skipNextLineClickRef.current = false;
+  }, []);
+
+  const handleTouchMove = useCallback((event: TouchEvent<HTMLDivElement>) => {
+    const start = touchStartRef.current;
+    const touch = event.touches[0];
+    if (!start || !touch) return;
+
+    const deltaX = Math.abs(touch.clientX - start.x);
+    const deltaY = Math.abs(touch.clientY - start.y);
+    if (
+      deltaX > TOUCH_SCROLL_THRESHOLD_PX ||
+      deltaY > TOUCH_SCROLL_THRESHOLD_PX
+    ) {
+      skipNextLineClickRef.current = true;
+    }
+  }, []);
+
+  const handleTouchEnd = useCallback(() => {
+    touchStartRef.current = null;
+  }, []);
+
   const options = useMemo(
     () => ({
       diffStyle:
@@ -411,7 +460,7 @@ const DiffFileItem = memo(function DiffFileItem({
       overflow: wrapText ? ('wrap' as const) : ('scroll' as const),
       hunkSeparators: 'line-info' as const,
       collapsed: !expanded,
-      enableHoverUtility: true,
+      enableHoverUtility: !IS_MOBILE,
       onLineClick: handleLineClick,
       theme: { dark: 'github-dark', light: 'github-light' } as const,
       unsafeCSS: PIERRE_DIFFS_THEME_CSS,
@@ -573,7 +622,14 @@ const DiffFileItem = memo(function DiffFileItem({
   );
 
   return (
-    <div data-diff-path={filePath} className="rounded-sm">
+    <div
+      data-diff-path={filePath}
+      className="rounded-sm"
+      onTouchStart={handleTouchStart}
+      onTouchMove={handleTouchMove}
+      onTouchEnd={handleTouchEnd}
+      onTouchCancel={handleTouchEnd}
+    >
       <FileDiff<ExtendedCommentAnnotation>
         fileDiff={fileDiffMetadata}
         options={options}
@@ -581,7 +637,9 @@ const DiffFileItem = memo(function DiffFileItem({
         renderAnnotation={annotations ? renderAnnotation : undefined}
         renderHeaderPrefix={renderHeaderPrefix}
         renderHeaderMetadata={renderHeaderMetadata}
-        renderHoverUtility={expanded ? renderHoverUtility : undefined}
+        renderHoverUtility={
+          expanded && !IS_MOBILE ? renderHoverUtility : undefined
+        }
       />
     </div>
   );

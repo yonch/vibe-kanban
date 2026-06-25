@@ -193,10 +193,12 @@ sequenceDiagram
 Execution output uses a per-process `MsgStore` as the live fan-out point. Raw
 stdout and stderr are persisted to local JSONL files under the asset directory,
 while executor-specific normalisers read the same stream and push conversation
-patches back into the `MsgStore`. WebSocket listeners stream either raw-log
-patches or normalised conversation patches from that store. SQLite remains the
-source of durable execution metadata and the legacy fallback for logs migrated
-from older versions.
+patches back into the `MsgStore`. UI listeners are split by payload: raw log
+viewers subscribe to raw stdout/stderr patches, the chat timeline subscribes to
+normalised conversation patches for coding-agent and review processes, and
+workspace/process list views subscribe to state patches derived from SQLite
+hooks. SQLite remains the source of durable execution metadata and the legacy
+fallback for logs migrated from older versions.
 
 ```mermaid
 flowchart TB
@@ -205,14 +207,18 @@ flowchart TB
   ProcessMsgStore["Per-execution MsgStore\nraw chunks, session ids,\nmessage ids, JsonPatch entries"]
   JsonlWriter["ExecutionLogWriter\nsessions/.../processes/{execution_id}.jsonl"]
   Normalizer["Executor normaliser\nCodex, Claude, ACP, Cursor, etc."]
-  RawWS["/api/execution-processes/{id}/raw-logs/ws\nstdout/stderr as conversation patches"]
-  NormalizedWS["/api/execution-processes/{id}/normalized-logs/ws\nnormalised conversation patches"]
+  RawWS["/api/execution-processes/{id}/raw-logs/ws\nWebSocket: STDOUT/STDERR JsonPatch entries"]
+  NormalizedWS["/api/execution-processes/{id}/normalized-logs/ws\nWebSocket: NORMALIZED_ENTRY JsonPatch entries"]
   DB[("SQLite\nworkspace, session,\nexecution_process,\ncoding_agent_turn metadata")]
   UpdateHook["SQLite update/preupdate hooks\nEventService::create_hook"]
   GlobalMsgStore["EventService MsgStore\nworkspace/process state patches"]
   EventsSSE["GET /api/events\nSSE history + live stream"]
+  WorkspacesWS["/api/workspaces/streams/ws\nWebSocket: workspace state patches"]
+  ProcessesWS["/api/execution-processes/stream/session/ws\nWebSocket: execution_process state patches"]
   LegacyLogs["Legacy execution_process_logs\nread fallback + startup migration"]
-  UI["Frontend listeners\nlogs, conversation,\nworkspace/process cache"]
+  RawLogUI["Raw log listeners\nuseLogStream"]
+  ChatUI["Chat timeline\nuseConversationHistory"]
+  StateUI["State listeners\nuseWorkspaces, useExecutionProcesses"]
 
   Child --> Stdout
   Stdout --> ProcessMsgStore
@@ -226,11 +232,40 @@ flowchart TB
   DB --> UpdateHook
   UpdateHook --> GlobalMsgStore
   GlobalMsgStore --> EventsSSE
-  RawWS --> UI
-  NormalizedWS --> UI
-  EventsSSE --> UI
+  GlobalMsgStore --> WorkspacesWS
+  GlobalMsgStore --> ProcessesWS
+  RawWS --> RawLogUI
+  NormalizedWS --> ChatUI
+  WorkspacesWS --> StateUI
+  ProcessesWS --> StateUI
   DB -->|"workspace status lookups"| UpdateHook
 ```
+
+The main listener split is:
+
+| Frontend listener | Endpoint and protocol | Payload shape | Intended data |
+| --- | --- | --- | --- |
+| `useLogStream` in process, script, and preview log views | `/api/execution-processes/{id}/raw-logs/ws` over WebSocket | `LogMsg::JsonPatch` entries whose values are `STDOUT` or `STDERR`, followed by `finished` | Raw execution logs for scripts, dev servers, and process-detail views. This stream does not carry normalised chat entries. |
+| `useConversationHistory` for workspace chat timeline | `/api/execution-processes/{id}/normalized-logs/ws` over WebSocket | `LogMsg::JsonPatch` entries whose values are normalised conversation entries, followed by `finished` | Agent/review conversation history: assistant text, tool use, token usage, todos, questions, errors, and related normalised entries. Script processes are routed to the raw-log stream instead. |
+| `useExecutionProcesses` via `ExecutionProcessesProvider` | `/api/execution-processes/stream/session/ws?session_id=...` over WebSocket | Initial `replace /execution_processes`, `Ready`, then add/replace/remove patches keyed by process id | Execution-process metadata for a session: status, timestamps, executor action, run reason, soft-delete state, and similar model fields. |
+| `useWorkspaces` via `WorkspaceProvider` | `/api/workspaces/streams/ws?archived=...` over WebSocket | Initial `replace /workspaces`, `Ready`, then workspace add/replace/remove patches | Workspace list/cache state, including computed workspace status. |
+| Legacy/global event consumers | `/api/events` over SSE | `LogMsg` encoded as SSE events, normally JSON patches from the EventService store | Global history + live state events from the SQLite hook bus. Current React state hooks use the filtered WebSocket endpoints above rather than `EventSource`. |
+
+The SQLite update stream is not an execution-log stream. `DBService` installs
+SQLite update and preupdate hooks for `workspaces`, `execution_processes`, and
+`scratch`. Those hooks fetch the changed row, convert it into JSON Patch
+operations, and push the patch into the `EventService` `MsgStore`. Filtered
+WebSocket routes then expose per-view slices of that patch bus, and `/api/events`
+exposes the same store as SSE for global consumers.
+
+Running execution-log streams read from memory first. If the process still has a
+live `MsgStore`, both raw and normalised endpoints replay its in-memory history
+and then continue with live broadcast messages. Once the live store is gone, the
+raw endpoint reads the process JSONL file from disk and appends `finished`; if no
+file exists it falls back to legacy `execution_process_logs` rows. Historical
+normalised replay also starts from the JSONL raw messages, populates a temporary
+`MsgStore`, reruns the executor normaliser, deduplicates the resulting patches,
+and then emits `finished`.
 
 ### Preview proxy flow
 

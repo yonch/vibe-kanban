@@ -190,15 +190,22 @@ sequenceDiagram
 
 ### Execution logs, UI streams, and state events
 
-Execution output uses a per-process `MsgStore` as the live fan-out point. Raw
-stdout and stderr are persisted to local JSONL files under the asset directory,
-while executor-specific normalisers read the same stream and push conversation
-patches back into the `MsgStore`. UI listeners are split by payload: raw log
-viewers subscribe to raw stdout/stderr patches, the chat timeline subscribes to
-normalised conversation patches for coding-agent and review processes, and
-workspace/process list views subscribe to state patches derived from SQLite
-hooks. SQLite remains the source of durable execution metadata and the legacy
+Execution logs and model-state events use different buses. Each running
+execution process owns a per-process `MsgStore`; that store is the live fan-out
+point for raw stdout/stderr and executor-normalised conversation patches. Raw
+stdout and stderr are also persisted to local JSONL files under the asset
+directory. The global `EventService` store is separate: it carries JSON Patch
+state updates derived from SQLite hooks for workspace, process, and scratch
+metadata. SQLite remains the durable source of execution metadata and the legacy
 fallback for logs migrated from older versions.
+
+In other words, chat and raw-log subscriptions are coordinated by the
+container/execution layer and its per-execution `MsgStore`s, not by
+`EventService`. `EventService` only coordinates database-state notifications.
+The frontend listener split follows that boundary: raw log viewers subscribe to
+raw stdout/stderr patches, the chat timeline subscribes to normalised
+conversation patches for coding-agent and review processes, and workspace or
+process list views subscribe to state patches derived from SQLite hooks.
 
 ```mermaid
 flowchart TB
@@ -253,10 +260,14 @@ The main listener split is:
 
 The SQLite update stream is not an execution-log stream. `DBService` installs
 SQLite update and preupdate hooks for `workspaces`, `execution_processes`, and
-`scratch`. Those hooks fetch the changed row, convert it into JSON Patch
-operations, and push the patch into the `EventService` `MsgStore`. Filtered
-WebSocket routes then expose per-view slices of that patch bus, and `/api/events`
-exposes the same store as SSE for global consumers.
+`scratch`. For inserts and updates, SQLite gives the hook a `rowid`; the async
+hook task reloads the changed row, converts the row into JSON Patch operations,
+and pushes the patch into the `EventService` `MsgStore`. Add and replace patches
+therefore carry the row payload, not only the row id. Deletes are handled by the
+preupdate hook while old key values are still available, so remove patches carry
+the identity needed to remove client-side state. Filtered WebSocket routes then
+expose per-view slices of that patch bus, and `/api/events` exposes the same
+store as SSE for global consumers.
 
 #### EventService ownership, threading, and filtering
 
@@ -290,19 +301,21 @@ derived workspace-status patch so workspace lists update when process state
 changes. This means the hook is the bridge from synchronous SQLite mutation
 notification into the async broadcast bus.
 
-Consumers register by subscribing to the store, not by registering with SQLite.
-`/api/events` uses `Deployment::stream_events`, which exposes the store's
-history plus live stream as SSE without view-specific filtering. The WebSocket
-routes for workspaces, execution processes, and scratch state call
-`EventService` stream helpers instead. Each helper first queries SQLite for a
-fresh snapshot, emits that snapshot as a `replace` patch, emits `Ready`, and
-then subscribes to the shared broadcast receiver for live patches.
+Consumers register by subscribing to the `EventService` store, not by
+registering with SQLite. `/api/events` uses `Deployment::stream_events`, which
+exposes the store's history plus live stream as SSE without view-specific
+filtering. The WebSocket routes for workspaces, execution processes, and scratch
+state call `EventService` stream helpers instead. Each helper first queries
+SQLite for a fresh snapshot, emits that snapshot as a `replace` patch, emits
+`Ready`, and then subscribes to the shared broadcast receiver for live patches.
 
-Filtering is owned by these `EventService` stream helpers in
-`crates/services/src/services/events/streams.rs`, with transport handled by
-`crates/server`. `stream_workspaces_raw` filters by patch path and optional
-`archived` state, converting some replacements to adds or removes so a filtered
-client cache stays coherent when a workspace enters or leaves the current view.
+Filtering for model-state WebSockets is owned by these `EventService` stream
+helpers in `crates/services/src/services/events/streams.rs`, with transport
+handled by `crates/server`. Clients are not expected to consume a complete
+unfiltered firehose for the main workspace and execution-process views.
+`stream_workspaces_raw` filters by patch path and optional `archived` state,
+converting some replacements to adds or removes so a filtered client cache stays
+coherent when a workspace enters or leaves the current view.
 `stream_execution_processes_for_session_raw` filters execution-process patches
 by `session_id` and `show_soft_deleted`; remove patches that cannot be
 session-verified are allowed through and the client cache ignores irrelevant
@@ -314,7 +327,10 @@ hooked table changes.
 This global `EventService` store is separate from the per-execution `MsgStore`
 instances kept by `LocalContainerService`. Per-execution stores are created when
 an execution process is started and are written by executor stdout/stderr
-forwarders and normalisers. They feed raw and normalised log WebSockets. The
+forwarders and normalisers. They feed the raw and normalised log WebSockets:
+`/api/execution-processes/{id}/raw-logs/ws` maps stdout/stderr messages into
+raw log patches, while `/api/execution-processes/{id}/normalized-logs/ws`
+streams the normalised conversation patches pushed by executor normalisers. The
 global event store only carries model-state patches derived from SQLite hook
 notifications.
 

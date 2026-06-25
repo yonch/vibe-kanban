@@ -327,6 +327,107 @@ normalised replay also starts from the JSONL raw messages, populates a temporary
 `MsgStore`, reruns the executor normaliser, deduplicates the resulting patches,
 and then emits `finished`.
 
+### Threading and synchronization
+
+Most backend concurrency is cooperative Tokio task concurrency. The process has
+one Tokio runtime, Axum spawns a task per request/connection, and long-lived
+services spawn additional tasks for event fan-out, process monitoring, diff
+watching, relay registration, and cleanup. Blocking filesystem, git, shell,
+tarball, PTY, and notification work is moved to Tokio's blocking pool with
+`tokio::task::spawn_blocking` or, for a few callback-style integrations, a
+dedicated `std::thread::spawn`.
+
+```mermaid
+flowchart TB
+  subgraph Tokio["Tokio async runtime"]
+    Axum["Axum request, SSE,\nand WebSocket tasks"]
+    GlobalEvents["Global EventService\nMsgStore + broadcast"]
+    ExecStores["Per-execution MsgStore\nraw and normalised logs"]
+    Container["LocalContainerService\nchild/process lifecycle maps"]
+    Approvals["Approvals\nDashMap + oneshot waiters\n+ broadcast patches"]
+    DiffStreams["Diff streams\nmpsc queue + watcher task"]
+    Relay["Relay/WebRTC\nmpsc command queues,\noneshot responses, Notify"]
+    PRMonitor["PR monitor\ninterval + Notify trigger"]
+  end
+
+  subgraph Blocking["Blocking OS work"]
+    Git["git and GitHub/Azure CLI\nspawn_blocking"]
+    FS["filesystem scan and watch callbacks"]
+    PTY["PTY reader thread\nunbounded mpsc output"]
+    Child["Agent/script child process\nprocess group"]
+  end
+
+  subgraph Pools["Resource pools"]
+    SQLite["SQLite SQLx pool"]
+    Postgres["Postgres SQLx pools\nremote and relay server"]
+    HTTP["reqwest client pools\npreview, remote, relay"]
+  end
+
+  subgraph BrowserRuntime["Browser runtime"]
+    Browser["React UI"]
+    BrowserWorkers["Frontend diff Worker pool\nsize 3"]
+  end
+
+  Browser --> Axum
+  Browser --> BrowserWorkers
+  Axum --> Container
+  Container --> Child
+  Child --> ExecStores
+  ExecStores --> Axum
+  SQLite -->|"update/preupdate hooks"| GlobalEvents
+  GlobalEvents --> Axum
+  Axum --> Approvals
+  Approvals --> Container
+  Axum --> DiffStreams
+  DiffStreams --> Git
+  DiffStreams --> FS
+  Relay --> Axum
+  PRMonitor --> Container
+  Container --> SQLite
+  Axum --> SQLite
+  Axum --> HTTP
+  Relay --> HTTP
+  Relay --> Postgres
+```
+
+The main synchronization domains are:
+
+| Domain | Cross-task or cross-thread boundary | Synchronization mechanism | Notes and contention risks |
+| --- | --- | --- | --- |
+| Server lifetime | `crates/server/src/main.rs` runs the main API listener and preview proxy listener as sibling tasks. | A process-wide `CancellationToken` is cloned into the deployment and listener graceful-shutdown futures. | Shutdown is cooperative. Tasks that own child tokens should stop when the root token is cancelled, while short spawned tasks may simply finish best-effort cleanup. |
+| SQLite state events | SQLite update/preupdate hooks run synchronously on SQLx connection threads but need to publish async UI events. | `EventService::create_hook` captures the Tokio runtime handle and spawns an async patch-building task; `MsgStore` uses a `std::sync::RwLock` for bounded history and a Tokio `broadcast::Sender` for live subscribers. | Hook callbacks must stay small because they run on the SQLite connection thread. Row reload and patch fan-out happen after the hook returns, reducing the chance that a database connection waits on async subscribers. |
+| Execution process lifecycle | Each agent or script has an OS child process, stdout/stderr forwarding, optional executor exit signal, DB log persistence, and an exit monitor. | `LocalContainerService` keeps `child_store`, `cancellation_tokens`, `msg_stores`, DB stream handles, and exit monitor handles in `Arc<tokio::sync::RwLock<HashMap<...>>>`. Executor completion uses `oneshot` exit signals plus `CancellationToken`s. | Process cleanup takes entries out of maps before awaiting long work where possible. The highest-risk area is nested access to child handles and lifecycle maps during stop/exit races, so new code should avoid holding a map lock while awaiting process IO, DB writes, or another service call. |
+| Execution logs | Child stdout/stderr, executor protocol normalisers, JSONL persistence, raw-log WebSockets, and chat-log WebSockets all share per-execution state. | Per-execution `MsgStore` instances combine bounded in-memory history with `broadcast::Sender<LogMsg>`. Log persistence subscribes to the same store and exits on `LogMsg::Finished`. | Slow subscribers can lag and miss broadcast entries, but they get an error and the durable fallback is the JSONL file after process completion. |
+| Approvals and questions | Executor adapters wait for UI approval responses while routes and WebSockets expose pending state. | `Approvals` stores pending/completed entries in `DashMap`, gives each request a `oneshot::Sender<ApprovalOutcome>`, and broadcasts JSON Patch updates on a bounded `broadcast::channel(64)`. Timeout watchers are spawned Tokio tasks. | This avoids holding a mutex across the executor wait. If approval patch subscribers lag, they receive a fresh pending snapshot. |
+| Queued follow-ups | Users can submit a follow-up while a session is already running. | `QueuedMessageService` is an in-memory `DashMap<SessionId, QueuedMessage>`. Exit-monitor finalization consumes the queued message and starts the next execution. | The queue is process-local and intentionally one item per session. The DB remains the durable source for execution records; queued drafts are not a multi-item durable work queue. |
+| Auth, config, relay credentials, and profile caches | Request handlers and background tasks share mutable configuration and auth state. | Mostly `Arc<tokio::sync::RwLock<...>>`; auth refresh has a `tokio::sync::Mutex<()>` guard so only one refresh runs at a time. | Treat these locks as short critical sections around in-memory data. Do not hold them while making remote HTTP requests unless the code explicitly needs to serialize that request. |
+| Diff and filesystem streams | Diff views combine file-watcher callbacks, periodic git checks, and git diff computation. | `diff_stream` sends `LogMsg`s through a bounded `mpsc::channel(1000)`, stores sent-file metadata in `std::sync::RwLock`s, uses `watch::channel(())` for git state notifications, and aborts the watcher task when `DiffStreamHandle` is dropped. Filesystem repo scans use a `CancellationToken` soft timeout plus `JoinHandle::abort` hard timeout. | Backpressure is local to each diff stream. Heavy git operations run in the blocking pool so they do not pin async workers. |
+| PTY terminal sessions | Terminal routes interact with blocking PTY readers and writers. | `PtyService` uses `Arc<std::sync::Mutex<HashMap<Uuid, PtySession>>>`; session creation runs in `spawn_blocking`; each PTY reader uses a dedicated OS thread and forwards bytes over an unbounded Tokio `mpsc` receiver. | The synchronous mutex protects portable-pty handles. Keep writes/resizes short; avoid adding async awaits while holding the mutex. |
+| Relay and WebRTC | Relay host/client code multiplexes HTTP requests and WebSocket streams over data channels and SSH tunnels. | Relay control uses `CancellationToken` child tokens. WebRTC clients use bounded `mpsc` command and data-channel queues, per-request `oneshot` response waiters, `tokio::sync::Mutex<HashMap<...>>` pending maps, and `Notify` for connection-open wakeups. Relay signing sessions use an `RwLock<HashMap<...>>`. | Pending maps are locked briefly to insert/remove waiters. Data-channel request timeouts prevent permanent waits. TunnelManager serializes tunnel creation with a mutex and double-checks before inserting an active tunnel. |
+| Remote/cloud services | The remote API and relay server are separate Axum processes backed by Postgres. | SQLx `PgPool`s are configured with `max_connections(10)` in both `crates/remote` and relay server DB setup. Request transaction metadata is propagated with a Tokio task-local `TX_CONTEXT`. | The pool size is the primary remote-side concurrency limit in this code. ElectricSQL and Postgres handle cross-process synchronization; app code should keep transactions scoped tightly. |
+| Preview proxy and HTTP clients | Preview iframe traffic and relay fallback requests proxy to local or remote HTTP/WebSocket targets. | `PreviewProxyService` owns a cloneable reqwest `Client`; WebSocket proxying delegates to bridge helpers. Reqwest manages its own connection pool. | There is no app-level preview lock. Backpressure and connection reuse are handled by Hyper/reqwest and the WebSocket bridge tasks. |
+| Frontend diff rendering | Large file diffs are parsed/highlighted off the main browser thread. | `ChangesPanelContainer` creates a `WorkerPoolContextProvider` for `@pierre/diffs` with `poolSize: 3`. | This is the only explicit frontend thread pool found in the app code search. |
+
+No explicit Tokio semaphores or barriers are currently used in the searched
+backend and frontend code. The practical concurrency limits are therefore the
+SQLx connection pools, bounded broadcast/mpsc queues, Tokio's blocking-thread
+pool, the browser worker pool, and external services or child processes.
+
+Potential deadlock patterns to avoid:
+
+- Do not hold `tokio::sync::RwLock` or `Mutex` guards across calls that can
+  re-enter the same service, wait on child processes, perform DB work, or await
+  network IO.
+- Do not call async code from SQLite hook callbacks. Use the existing runtime
+  spawn bridge so SQLite connection threads are not blocked by async work.
+- Keep `std::sync` locks in `MsgStore`, PTY sessions, filesystem watcher
+  state, and executor caches small and non-async. These locks are safe because
+  current code only guards in-memory structures or synchronous handles.
+- Prefer bounded channels for new long-lived streams unless losing
+  backpressure is intentional. Existing unbounded channels are used for PTY
+  output and some executor protocol/control paths where the producer is tied to
+  a local process or protocol callback.
+
 ### Preview proxy flow
 
 Preview traffic is separate from normal API traffic. The main server exposes

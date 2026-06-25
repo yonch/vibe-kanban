@@ -1,502 +1,273 @@
 ---
-title: "Dioxus Frontend Migration"
-description: "Evaluate whether the Vibe Kanban React frontend can move to Dioxus incrementally, where the migration is expensive, and when the host runtime should switch from TypeScript to Rust."
+title: "Dioxus Frontend Migration Guide"
+description: "A comprehensive guide to incrementally migrating the Vibe Kanban frontend from React to Dioxus, outlining the strategy, costs, and key decision points."
 ---
+
+## Table of Contents
+
+- [Executive Summary](#executive-summary)
+- [1. Understanding the Current Frontend](#1-understanding-the-current-frontend)
+- [2. The Dioxus Proposition: What Changes?](#2-the-dioxus-proposition-what-changes)
+- [3. Incremental Migration Strategies](#3-incremental-migration-strategies)
+  - [Option 1: TypeScript Host with Dioxus Islands](#option-1-typescript-host-with-dioxus-islands)
+  - [Option 2: Feature-by-Feature Dioxus Pages](#option-2-feature-by-feature-dioxus-pages)
+  - [Option 3: Parallel Dioxus App Shell](#option-3-parallel-dioxus-app-shell)
+  - [Option 4: Big-Bang Rewrite (Not Recommended)](#option-4-big-bang-rewrite-not-recommended)
+- [4. A Practical Migration Path (Phased Approach)](#4-a-practical-migration-path-phased-approach)
+  - [Phase 0: Build and Contract Spike](#phase-0-build-and-contract-spike)
+  - [Phase 1: Define Frontend Facades](#phase-1-define-frontend-facades)
+  - [Phase 2: Migrate Low-Risk Leaf Features](#phase-2-migrate-low-risk-leaf-features)
+  - [Phase 3: Migrate Whole Routes](#phase-3-migrate-whole-routes)
+  - [Phase 4: Migrate the Core Workspace](#phase-4-migrate-the-core-workspace)
+  - [Phase 5: Invert the Host](#phase-5-invert-the-host)
+- [5. Analysis of High-Cost & Difficulty Areas](#5-analysis-of-high-cost--difficulty-areas)
+  - [High-Difficulty Areas (Chart)](#high-difficulty-areas-chart)
+- [6. Technical Deep Dives](#6-technical-deep-dives)
+  - [State Management Strategy](#state-management-strategy)
+  - [Styling Strategy](#styling-strategy)
+  - [Developer Experience (DX)](#developer-experience-dx)
+  - [Testing Strategy](#testing-strategy)
+- [7. Final Decision Guidance](#7-final-decision-guidance)
 
 ## Executive Summary
 
-An incremental migration from the current React and TypeScript frontend to
-Dioxus is possible, but it should be treated as a multi-phase rewrite rather
-than a component-by-component translation with low switching cost.
+An incremental migration from the current React/TypeScript frontend to Dioxus is feasible. However, it should be approached as a **phased rewrite** rather than a simple component-for-component translation. The cost and complexity of bridging two different paradigms (React's virtual DOM vs. Dioxus's Rust-based reactivity) are non-trivial.
 
-The most practical starting point is TypeScript-hosted Dioxus: keep
-`packages/local-web`, `packages/remote-web`, and the existing React route tree as
-the app shell, then mount isolated Dioxus/WebAssembly islands for new or
-self-contained UI. That lets the team validate Dioxus build, packaging, styling,
-browser API access, and Rust-to-JavaScript interop without disturbing the core
-workspace, chat, diff, terminal, remote relay, or cloud flows.
+**Recommendation:**
 
-The harder and more strategically important migration is Dioxus-hosted
-TypeScript: a Rust/Dioxus app shell owns routing, providers, long-lived
-connections, shared state, and page composition, while selected TypeScript
-widgets remain embedded for mature browser libraries that are not worth
-rewriting immediately. That inversion is worth considering only after most
-product state and page composition has moved to Rust. Until then, switching the
-host would duplicate the existing shell and force the highest-risk work early.
+1.  **Start with a TypeScript-hosted Dioxus architecture.** The existing React shell (`local-web`, `remote-web`) should remain the application's entry point. New or self-contained features can be built as isolated Dioxus "islands" (WebAssembly components). This approach allows the team to validate the Dioxus workflow (builds, styling, interop) with minimal disruption.
+2.  **Defer the "host inversion"** (a Dioxus app hosting TypeScript components) until a significant portion of the application's state and routing is managed by Rust. Attempting this too early would introduce immense complexity.
 
-Recommended posture:
+**Key Takeaways:**
 
-- Do not start by rewriting `web-core` wholesale.
-- Start with a Dioxus spike in one leaf surface with narrow state and no
-  dependency on React context.
-- Keep the existing backend API and generated Rust source types as the durable
-  contract.
-- Introduce an explicit frontend facade layer before moving large features:
-  transport, route navigation, query/cache semantics, runtime services, and
-  design tokens.
-- Expect the high-cost areas to be shared state, routing, drag/drop kanban,
-  chat/editor, diffs, terminal, virtualization, and remote host transport.
+-   **Don't rewrite `web-core` first.** The shared components and hooks are deeply integrated with the React ecosystem.
+-   **Begin with a small "spike"** on a low-risk UI element to establish a clear interop contract.
+-   **Introduce explicit frontend "facades"** (for APIs, navigation, etc.) to create a shared foundation for both React and Dioxus parts of the app.
+-   **Acknowledge the high-cost areas:** shared state, routing, and complex UI widgets (Kanban board, chat, terminal) will be the most challenging to migrate.
 
-## Current Frontend Shape
+## 1. Understanding the Current Frontend
 
-The current frontend has three important layers:
+Our frontend is structured into three primary layers, all built on React:
 
-- `packages/local-web`: local browser/Tauri React app shell. It owns bootstrap,
-  Sentry/PostHog, Tauri listeners, local route files, local providers, and the
-  local API transport.
-- `packages/remote-web`: cloud React app shell. It owns remote auth, account and
-  invitation routes, host navigation, remote API setup, and the local API
-  transport override for WebRTC or relay access to a selected host.
-- `packages/web-core`: shared React product experience. It contains workspace
-  UI, kanban UI, chat, create flows, dialogs, hooks, stores, API helpers,
-  keyboard handling, i18n glue, and shared layouts.
+-   `packages/local-web`: The local application shell (including Tauri). Manages local routing, providers, and API transport.
+-   `packages/remote-web`: The cloud application shell. Manages remote authentication, account-level routing, and WebRTC/relay transport for remote hosts.
+-   `packages/web-core`: The shared product experience. Contains the vast majority of UI components, hooks, stores, and business logic.
 
-The dependency graph is React-shaped all the way through the product layer.
-`web-core` and `packages/ui` depend on React context, hooks, TanStack Query,
-TanStack Router integration, Zustand stores, Radix/shadcn-style components,
-Lexical, CodeMirror, xterm, React DnD libraries, React virtualization, and
-React-specific diff and markdown renderers.
+The dependency graph is deeply rooted in the React ecosystem, relying on:
 
-That means the existing split between app shells and shared feature modules is a
-good migration boundary, but not a free one. A Dioxus migration needs new Rust
-equivalents for the product shell contracts, not just RSX versions of JSX
-components.
+-   **Component Model:** React Context, Hooks
+-   **Data Fetching & State:** TanStack Query, Zustand
+-   **Routing:** TanStack Router
+-   **UI Libraries:** Radix UI, shadcn/ui, React DnD, Lexical (editor), CodeMirror, xterm.js
+-   **Virtualization:** React-specific virtualization libraries.
 
-## What Dioxus Changes
+This tight coupling means that simply translating JSX to Dioxus's RSX is not enough. We must architect new Rust-native equivalents for the contracts and patterns these libraries provide.
 
-Dioxus web apps compile to WebAssembly and render into the browser DOM. Current
-Dioxus documentation describes the web target as its best-supported target and
-notes that browser APIs are available through `wasm-bindgen`. Dioxus also
-supports running JavaScript through `document::eval`, and Dioxus RSX can render
-web components directly. These capabilities make interop possible in both
-directions:
+## 2. The Dioxus Proposition: What Changes?
 
-- React/TypeScript can host a Dioxus island by loading a WASM bundle and
-  mounting it into a DOM node.
-- Dioxus can host TypeScript widgets through custom elements, JavaScript
-  modules, `eval`, `wasm-bindgen` bindings, or imperative mount/unmount wrappers.
+Dioxus web applications compile to WebAssembly (WASM) and manipulate the browser's DOM. Dioxus provides excellent support for its web target, offering several "escape hatches" to interact with JavaScript. This enables two-way interoperability:
 
-Interop is possible, but it is not the same as native composition. The expensive
-parts are lifecycle, state ownership, event typing, focus management, styling,
-bundling, and test coverage across the boundary.
+-   **React hosts Dioxus:** A React component can load a WASM bundle and mount it into a DOM node. This is the "island" model.
+-   **Dioxus hosts React:** A Dioxus component can render a custom element (web component) that encapsulates a React widget, or use `wasm-bindgen` to call JavaScript functions.
 
-References:
+While interop is possible, it's not free. The main challenges lie at the boundary: managing component lifecycles, sharing state, typing events, handling focus, unifying styling, and configuring the build process.
 
-- Dioxus web guide: https://dioxuslabs.com/learn/0.7/guides/platforms/web/
-- Dioxus JavaScript and DOM escape hatches:
-  https://dioxuslabs.com/learn/0.7/essentials/ui/escape/
-- Dioxus project structure notes:
-  https://dioxuslabs.com/learn/0.7/beyond/project_structure/
+## 3. Incremental Migration Strategies
 
-## Incremental Migration Options
+Here are four potential strategies, ordered from most to least recommended.
 
-### Option 1: TypeScript Host With Dioxus Islands
+### Option 1: TypeScript Host with Dioxus Islands
 
-Keep the current Vite/React app as the page owner. Add one or more Dioxus crates
-that compile to WASM and expose mount/unmount functions. React components render
-a host `<div>`, call the Dioxus mount function, pass serialized props, and listen
-for custom DOM events or callbacks.
+The existing Vite/React app remains the host. New Dioxus crates compile to WASM and expose `mount` and `unmount` functions. A React component renders a container `<div>` and manages the lifecycle of the Dioxus island.
 
-Best candidates:
-
-- A new settings panel or diagnostic panel.
-- A read-only visualization.
-- A standalone workflow that talks directly to HTTP endpoints.
-- A component that does not need React context, TanStack Router, drag/drop,
-  Lexical, xterm, or React virtualization.
-
-Advantages:
-
-- Lowest initial blast radius.
-- Existing local and remote apps keep working.
-- Existing React routes, auth, transport, query cache, and Tauri setup remain
-  intact.
-- The team can evaluate Dioxus WASM size, load behavior, hot reload,
-  accessibility, Tailwind/CSS reuse, CI, and packaging.
-
-Costs:
-
-- Boundary glue must be written and maintained.
-- Dioxus islands cannot consume React context directly.
-- Shared app state must be copied, serialized, or exposed through an adapter.
-- Two frontend runtimes ship at once.
-- Fine-grained islands can become more expensive than a normal rewrite because
-  every island needs a boundary contract.
-
-This option is best for evaluation and new isolated surfaces. It is not a good
-long-term way to migrate every component in `packages/ui`.
+-   **Best For:** New settings panels, read-only visualizations, or standalone forms that don't rely on shared React context.
+-   **Advantages:**
+    -   Lowest initial blast radius.
+    -   Core application remains stable.
+    -   Allows for evaluation of Dioxus's performance, developer experience, and build tooling.
+-   **Costs:**
+    -   Requires writing and maintaining "glue" code for the boundary.
+    -   State must be explicitly passed (serialized) between React and Dioxus.
+    -   Increases bundle size with two frontend runtimes.
 
 ### Option 2: Feature-by-Feature Dioxus Pages
 
-Keep the React app shell and route tree, but replace an entire route body with a
-Dioxus page. The route still comes from TanStack Router, but React delegates page
-content to Dioxus. The Dioxus page owns its local state and calls backend APIs
-through a Rust or JavaScript transport facade.
+The React app and its router remain in control, but an entire page/route body is delegated to a Dioxus component.
 
-Best candidates:
-
-- A route with a clear URL and data boundary.
-- A feature whose data can be loaded directly from backend endpoints.
-- A page that can avoid shared React providers or can receive enough context as
-  explicit props.
-
-Advantages:
-
-- Fewer interop boundaries than component islands.
-- Lets a whole feature use Dioxus state and RSX naturally.
-- Preserves current app shell risk controls.
-- Creates a realistic migration path for non-core pages before workspace pages.
-
-Costs:
-
-- Navigation, auth, runtime mode, route params, and transport must be bridged.
-- Query cache behavior may diverge between React and Dioxus versions.
-- Shared UI components need Rust equivalents or TypeScript wrappers.
-- Feature-level parity testing becomes necessary.
-
-This option is the most useful migration middle ground.
+-   **Best For:** Routes with clear data boundaries that can function with minimal shared UI state.
+-   **Advantages:**
+    -   Reduces the amount of fine-grained interop code compared to the island model.
+    -   Allows a full feature to be built idiomatically in Dioxus.
+-   **Costs:**
+    -   Core services like navigation, auth, and API transport must be bridged.
+    -   Requires building Rust equivalents of any shared UI components used on that page.
 
 ### Option 3: Parallel Dioxus App Shell
 
-Create a new Dioxus app shell next to `packages/local-web` and
-`packages/remote-web`. It owns its own router, providers, generated bindings,
-transport adapters, and page layout. The React app continues to serve production
-traffic while Dioxus reaches parity behind a flag or alternate development URL.
+A new Dioxus application shell is developed in parallel to the existing React shells. This new shell would have its own router, state management, and transport logic. It could be deployed behind a feature flag or at a separate URL for development.
 
-Advantages:
+-   **Advantages:**
+    -   Enables building the "ideal" Dioxus architecture from the start.
+    -   Avoids complicating the existing React app with excessive interop layers.
+-   **Costs:**
+    -   Duplicates a significant amount of work for an extended period.
+    -   High risk of behavior drifting between the two versions.
 
-- Avoids distorting the React app with too many interop layers.
-- Lets Dioxus own routing and state from the beginning.
-- Good for proving the final architecture before committing to a full switch.
+### Option 4: Big-Bang Rewrite (Not Recommended)
 
-Costs:
+Rewriting the entire frontend in Dioxus at once. This is technically possible but carries an unacceptably high risk due to the complexity and maturity of the current application.
 
-- Duplicates product shell work for a long time.
-- Requires parallel local and remote runtime behavior.
-- Needs strong test fixtures to prevent behavior drift.
-- The highest-risk systems still need to be rewritten eventually.
+## 4. A Practical Migration Path (Phased Approach)
 
-This option is useful after early spikes succeed, especially if the team wants a
-clear Rust-first target without repeatedly embedding small islands.
-
-### Option 4: Big-Bang Rewrite
-
-Rewrite the app shell, `web-core`, and `packages/ui` in Dioxus before switching
-users.
-
-This is technically possible but not recommended. The current frontend has too
-many mature flows and live connection types for a big-bang rewrite to be
-predictable.
-
-## Practical Migration Path
+We recommend a multi-phase approach that starts small and progressively transfers ownership from React to Dioxus.
 
 ### Phase 0: Build and Contract Spike
 
-Add a small Dioxus crate that compiles to web WASM and can be loaded from the
-current Vite app. The spike should prove:
+The goal of this phase is to establish a working interop pattern, not to ship a feature. Create a small Dioxus crate that proves the following:
 
-- Local development workflow.
-- Production build integration.
-- WASM asset loading under local web, remote web, and Tauri.
-- CSS and design token reuse.
-- Prop passing from React to Dioxus.
-- Event passing from Dioxus to React.
-- Basic HTTP call to the local API.
-- CI checks for the Rust/WASM package.
+-   **Development:** A smooth local development workflow with hot-reloading for both React and Dioxus.
+-   **Build:** Successful integration into the production Vite build.
+-   **Interop Contract:** A clear, documented way to pass props from React to Dioxus and emit events from Dioxus back to React.
+-   **Integration:** CSS/Tailwind reuse, basic API calls, and WASM loading in all environments (local, remote, Tauri).
 
-The output of this phase should be a documented interop contract, not a product
-rewrite.
+**Example: React Host Component**
+```tsx
+import React, { useEffect, useRef } from 'react';
+// These functions would be from your WASM bundle
+import { mount, unmount } from 'my-dioxus-widget';
 
-### Phase 1: Frontend Facades
+const DioxusWidgetHost = ({ someData }) => {
+  const containerRef = useRef(null);
 
-Before moving any complex feature, define frontend contracts that both React and
-Dioxus can use:
+  useEffect(() => {
+    if (containerRef.current) {
+      // Mount the Dioxus component with initial props
+      mount(containerRef.current, { initialData: someData });
+    }
 
-- API transport: direct local fetch/WebSocket, remote WebRTC, and relay fallback.
-- Navigation: workspace, host, project, issue, draft, and VS Code routes.
-- Runtime services: auth, user system, theme, notifications, telemetry, Tauri.
-- Generated API types: continue deriving from Rust and generating TypeScript,
-  but also expose Rust-native frontend types for Dioxus.
-- UI tokens: colors, spacing, typography, layout primitives, and responsive
-  breakpoints.
+    // Define a custom event listener to get data back from Dioxus
+    const handleDioxusEvent = (event) => {
+      console.log('Event from Dioxus:', event.detail);
+    };
+    window.addEventListener('dioxus-custom-event', handleDioxusEvent);
 
-This prevents the Dioxus implementation from re-learning product behavior by
-reading React hooks one at a time.
+    return () => {
+      if (containerRef.current) {
+        unmount(containerRef.current);
+      }
+      window.removeEventListener('dioxus-custom-event', handleDioxusEvent);
+    };
+  }, [someData]);
 
-### Phase 2: Low-Risk Leaf Features
+  return <div ref={containerRef} />;
+};
+```
 
-Move isolated pages or panels first. Good candidates are surfaces that load data
-once, submit a form, and close. Avoid the workspace screen, chat composer,
-terminal, kanban board, and diff viewer at this stage.
+### Phase 1: Define Frontend Facades
 
-Success criteria:
+Before migrating complex features, create a set of framework-agnostic services ("facades"). These will act as a stable bridge that both React and Dioxus can use.
 
-- Same behavior in local browser, Tauri, and remote web where applicable.
-- No global React state dependency except explicit props and events.
-- No duplicated backend endpoint semantics.
-- Clear rollback path to the React version.
+-   **API Transport:** A unified interface for `fetch`/`WebSocket` calls that handles local, remote WebRTC, and relay logic internally.
+-   **Navigation:** A service for programmatic routing (`navigateTo('/path')`) that abstracts away the underlying router implementation.
+-   **Runtime Services:** Access to auth status, user info, themes, and notifications.
+-   **UI Tokens:** A single source of truth for design tokens (colors, spacing, etc.) consumable by both CSS (for React) and Rust (for Dioxus).
 
-### Phase 3: Whole-Route Migration
+### Phase 2: Migrate Low-Risk Leaf Features
 
-Move a route body at a time. At this point, Dioxus should own the page-local
-state and data loading for that route. React should only provide route params,
-runtime services, and a mount point.
+With the facades in place, begin migrating isolated pages or panels. Good candidates are features that are self-contained and don't rely heavily on global state.
 
-Good route candidates are pages with clear URL ownership and limited long-lived
-connection state. Cloud account, settings, and non-workspace project management
-surfaces are better candidates than active workspace execution.
+### Phase 3: Migrate Whole Routes
 
-### Phase 4: Workspace Runtime Migration
+Move entire route bodies to Dioxus. At this stage, Dioxus owns the page-local state and data loading for the migrated route. React's role is reduced to providing the mount point and routing parameters.
 
-Move the core workspace experience only after transport, state, and UI
-primitives are proven. This phase includes:
+### Phase 4: Migrate the Core Workspace
 
-- Workspace list and detail streams.
-- Session and execution-process streams.
-- Chat timeline and normalized logs.
-- Raw logs.
-- Diff stream and diff store.
-- Terminal tabs.
-- Preview controls and preview browser.
-- Workspace actions, approvals, retry, merge, push, rebase, and branch changes.
+This is the most complex phase and should only be attempted after the previous phases have proven successful. This involves porting the core real-time features of the application: data streams, chat, terminal, diffs, etc. This is a major undertaking that should be planned as a dedicated project.
 
-This is the point where the migration becomes a product-platform rewrite. It
-should be planned as a major project with parity tests and staged rollout.
+### Phase 5: Invert the Host
 
-### Phase 5: Host Inversion
+The final step is to switch from a TypeScript-hosted app to a Dioxus-hosted app. This becomes viable only when Dioxus manages the majority of:
 
-Switch from TypeScript-hosted Dioxus to Dioxus-hosted TypeScript when Dioxus owns
-most of these:
+-   Top-level routing
+-   Core application state and providers
+-   Long-lived data streams
+-   API transport
 
-- Top-level routing.
-- Runtime providers.
-- Workspace and project page composition.
-- Long-lived stream lifecycle.
-- API transport selection.
-- Design-system primitives.
-- Modal/dialog ownership.
-- Keyboard command ownership.
+At this point, React becomes a compatibility layer for a few complex widgets that are not worth rewriting (e.g., the Lexical editor).
 
-After that point, React becomes the compatibility layer for remaining widgets
-instead of the application host.
+## 5. Analysis of High-Cost & Difficulty Areas
 
-## High-Cost and High-Difficulty Areas
+The migration of certain features will be significantly more complex than others.
 
-### Routing and App Shells
+### High-Difficulty Areas (Chart)
 
-Current local and remote route trees are generated by TanStack Router. Route
-structure is deeply tied to local versus remote runtime behavior, host-scoped
-URLs, project and issue context, workspace drafts, VS Code routes, auth, and
-navigation helpers.
+| Area | Difficulty | Reason | Recommended Strategy |
+| :--- | :--- | :--- | :--- |
+| **Chat Editor** | **Very High** | Deeply integrated with Lexical, a complex JS library. | Embed the JS widget in Dioxus. Do not rewrite. |
+| **Routing** | **High** | TanStack Router is tied to the React component tree. | Create a navigation facade. Replace router late in migration. |
+| **Transport/Remote** | **High** | Complex logic for WebRTC/relay connections. | Create a transport facade early. |
+| **Shared State** | **High** | State is spread across multiple React-specific libraries. | Use facades and migrate state ownership incrementally. |
+| **UI Library (`ui`)** | **High** | Relies on Radix and React-specific accessibility patterns. | Rewrite components incrementally. Budget significant time. |
+| **Kanban Board** | **High** | Complex drag-and-drop interactions. | Embed a mature JS library or rewrite as a late-stage goal. |
+| **Diffs & Logs** | **High** | Performance-sensitive virtualization and rendering. | Migrate only after stream and virtualization patterns are proven. |
+| **Terminal** | **Medium** | Based on xterm.js. | Embed the JS widget in Dioxus. Do not rewrite. |
+| **Tooling & DX** | **Medium** | Introduces a parallel Rust toolchain (cargo, rust-analyzer). | Address in Phase 0 to ensure a smooth developer workflow. |
 
-Dioxus has its own router model. A migration must either bridge from TanStack
-Router into Dioxus route state or replace route ownership. Bridging is good
-early; replacing route ownership is a host-inversion milestone.
+## 6. Technical Deep Dives
 
-Difficulty: high.
+### State Management Strategy
 
-### Transport and Remote Host Access
+A key challenge is bridging the state management paradigms.
 
-The local app can call `/api` directly. The remote app installs a transport
-override so host-scoped local API traffic can go through WebRTC or signed relay
-HTTP/WebSocket sessions. This behavior is central to remote workspace usage.
+| React Concept | Dioxus Equivalent | Notes |
+| :--- | :--- | :--- |
+| `useState` / `useReducer` | `use_signal` / `use_reducer` | Dioxus signals are the foundation of its reactive system. |
+| `useContext` | Dioxus Context API | Similar concept for providing state down the component tree. |
+| Zustand | Dioxus `use_store` / Global Signals | Dioxus provides built-in primitives for global state. |
+| TanStack Query | Dioxus `use_resource` | `use_resource` is used for managing async operations like data fetching. |
 
-Any Dioxus page that touches workspace data must share the same logical
-transport semantics. Reimplementing this too early risks subtle local/remote
-divergence.
+The strategy should be to gradually move state ownership into Dioxus's reactive system, using the facades to abstract the state source from the components.
 
-Difficulty: high.
+### Styling Strategy
 
-### Long-Lived Streams
+The document mentions Tailwind CSS. Sharing styles is critical.
 
-The workspace UI uses multiple concurrent streams: workspace lists, workspace
-diffs, execution processes, normalized logs, raw logs, terminal tabs, and remote
-Electric shapes. Existing hooks own reconnect behavior, initialization state,
-JSON Patch application, batching, and lifecycle cleanup.
+-   **Initial Phase:** Run the Tailwind CLI as part of the main web application's build process. Dioxus components can use the generated CSS classes via the `class` attribute in RSX. The `build.rs` script in the Dioxus crate can be configured to ensure the Tailwind process runs when Rust code changes.
+-   **Host Inversion Phase:** When Dioxus becomes the host, its build process (e.g., via `dioxus-cli`) would take ownership of running the Tailwind CLI.
 
-Dioxus can model these flows, but the migration is not mechanical. The team must
-port stream state machines and cache semantics carefully.
+The key is to ensure both the React and Dioxus parts of the app are pointing to the same generated CSS file.
 
-Difficulty: high.
+### Developer Experience (DX)
 
-### Shared State and Cache Semantics
+Introducing a second language and toolchain has significant DX implications.
 
-React state is spread across TanStack Query, Zustand, React context providers,
-custom hooks, local storage scratch state, and derived route state. Dioxus uses a
-different reactive model with signals, stores, resources, and component-scoped
-state.
+-   **Tooling:** Developers will need to be comfortable with both `npm`/`pnpm` and `cargo`, as well as their respective language servers (TypeScript LS and `rust-analyzer`).
+-   **Hot-Reloading:** Dioxus has its own hot-reloading system. The goal of Phase 0 is to create a seamless experience where changes in both React and Dioxus code trigger the correct updates in the browser.
+-   **Debugging:** Debugging WASM can be more challenging than debugging JavaScript. Developers will need to become familiar with browser devtools for WASM.
 
-The hard part is not choosing Dioxus equivalents. The hard part is preserving
-invalidation, optimistic updates, derived state, and component lifetime behavior.
+### Testing Strategy
 
-Difficulty: high.
+The testing strategy must evolve with the migration.
 
-### UI Library and Accessibility
+-   **Unit & Integration Tests:** Dioxus has its own test harness for components. New Dioxus code should have comprehensive tests written in Rust.
+-   **Contract Tests:** The interop boundaries (facades) must have strict contract tests to prevent regressions.
+-   **End-to-End (E2E) Tests:** Use a tool like Playwright to run E2E tests on migrated user flows. These tests are framework-agnostic and are crucial for ensuring functional parity.
+-   **Visual Regression Tests:** For complex UI, visual regression testing can catch subtle layout and styling issues.
 
-`packages/ui` is React-specific and uses Radix primitives, shadcn-style wrappers,
-React refs, React event types, Lexical plugins, drag/drop libraries, and
-React-only virtualization. Rewriting this package in Dioxus means rebuilding a
-large amount of accessible interaction behavior.
+## 7. Final Decision Guidance
 
-Simple display components are cheap. Dialogs, dropdowns, comboboxes, command
-menus, typeahead, keyboard navigation, focus traps, and mobile drawers are not.
+This migration is a strategic investment in the long-term health and performance of the frontend.
 
-Difficulty: high.
+**Use Dioxus for:**
 
-### Kanban Drag and Drop
+-   New, isolated features where the performance and type-safety of Rust are a clear advantage.
+-   Pages that can be built directly against our backend API contracts.
+-   Future-proofing our frontend by aligning it with the Rust-based backend.
 
-The kanban board depends on mature drag/drop behavior, hit testing, keyboard
-interaction, auto-scroll, multi-select, and remote issue updates. Recreating this
-in Dioxus will likely require either a Rust implementation or a JavaScript
-library wrapper.
+**Keep React/TypeScript (for now) for:**
 
-This is a poor first migration target.
+-   The core workspace UI, which is complex and stable.
+-   Areas with heavy reliance on mature JavaScript libraries (e.g., Lexical editor, xterm.js terminal).
+-   The main application shell, until Dioxus is ready to take over hosting responsibilities.
 
-Difficulty: high.
-
-### Chat Composer and Rich Text Editing
-
-The current editor stack uses Lexical and many custom plugins for markdown,
-mentions/typeahead, attachments, images, code, PR comments, paste handling, and
-keyboard behavior. This is one of the least attractive areas to rewrite early.
-
-The practical Dioxus strategy is to embed the existing TypeScript editor as a
-custom element or imperative widget until a Rust-native editor story is proven.
-
-Difficulty: very high.
-
-### Diffs, Logs, and Virtualization
-
-Diff and log views depend on specialized rendering, syntax highlighting,
-virtualization, scroll sync, and high-volume incremental updates. Performance and
-scroll behavior are user-visible.
-
-These can move to Dioxus, but only after the stream model and virtualization
-strategy are clear.
-
-Difficulty: high.
-
-### Terminal
-
-The terminal uses xterm and addons. Rewriting terminal behavior in Rust is not a
-good use of time. The likely long-term strategy is to embed xterm as a
-TypeScript/JavaScript widget inside Dioxus and keep the Rust side responsible for
-connection lifecycle and typed events.
-
-Difficulty: medium if embedded, very high if rewritten.
-
-### Tauri and Desktop Behavior
-
-The local app also runs inside Tauri. Existing desktop behavior includes
-notification navigation, update handling, zoom, clipboard paths, drag regions,
-and platform-specific behavior.
-
-Dioxus can run in a browser/Tauri-style setup, and Dioxus documentation points
-to Tauri when direct web APIs are needed across desktop and mobile. Still, this
-repo already has a Tauri shell. Migration should preserve the existing Tauri
-contract before considering any larger desktop runtime change.
-
-Difficulty: medium to high.
-
-### Tooling and Developer Experience
-
-The current frontend uses Vite, TypeScript, Prettier, ESLint, TanStack Router
-generation, and React Fast Refresh. Dioxus introduces Rust compile times, WASM
-packaging, Dioxus hot reload behavior, Rust formatting, and potentially another
-asset pipeline.
-
-This is manageable, but it must be made boring before product work depends on
-it.
-
-Difficulty: medium.
-
-## When to Invert the Host
-
-The migration starts as TypeScript with embedded Dioxus because the current
-React app owns the shell and most product behavior. Inverting too early would
-force the Dioxus app to duplicate:
-
-- Local and remote route trees.
-- Auth and user runtime.
-- WebRTC and relay transport selection.
-- Workspace provider stack.
-- Modal and command ownership.
-- Keyboard handling.
-- Shared UI primitives.
-- Tauri-specific behavior.
-
-The inversion point arrives when the TypeScript host is mostly a compatibility
-wrapper. A practical threshold is:
-
-- At least one major workspace or project route is fully Dioxus-owned.
-- Dioxus owns the API transport facade and long-lived stream lifecycle.
-- Most new feature work is happening in Rust.
-- Remaining React code is limited to expensive embedded widgets such as Lexical,
-  xterm, CodeMirror, or a drag/drop board.
-- The Dioxus shell can run local browser, Tauri, and remote cloud entrypoints
-  with equivalent navigation and auth behavior.
-
-Before that threshold, keep React as the host. After that threshold, Dioxus as
-the host reduces duplicated route, provider, and state ownership.
-
-## TypeScript Embedded in Dioxus
-
-Assuming the project reaches Dioxus-hosted TypeScript, the likely embedding
-patterns are:
-
-- Custom elements for widgets with clear attribute/event boundaries.
-- Imperative mount/unmount wrappers for React widgets that need a React root.
-- `wasm-bindgen` bindings for focused JavaScript APIs.
-- Dioxus `document::eval` for small escape hatches, not primary architecture.
-- Direct web components for third-party browser widgets when available.
-
-Good embedded TypeScript candidates:
-
-- Lexical editor.
-- xterm terminal.
-- CodeMirror editor.
-- Mature drag/drop board if a Dioxus-native version is not ready.
-- Complex markdown/diff renderers where JavaScript libraries remain better.
-
-The Dioxus side should own data, transport, and page lifecycle. The embedded
-TypeScript widget should receive explicit props and emit explicit events.
-
-## Testing Strategy
-
-Migration should add parity tests before moving core flows:
-
-- Contract tests for transport behavior: local direct, remote WebRTC, and relay
-  fallback.
-- Stream reducer tests for JSON Patch snapshots, patches, reconnects, and
-  finished states.
-- Route parity tests for local and remote URL generation.
-- Playwright tests for migrated user workflows.
-- Visual checks for dense workspace, kanban, chat, and mobile layouts.
-- Tauri smoke tests for desktop-only behavior after any shell change.
-
-For early Dioxus islands, smoke tests are enough. For workspace migration, parity
-tests are mandatory.
-
-## Decision Guidance
-
-Use Dioxus for:
-
-- New isolated surfaces where Rust ownership is valuable.
-- Pages that can directly consume backend API contracts.
-- Future Rust-first product areas where shared types and backend behavior matter
-  more than JavaScript ecosystem libraries.
-
-Keep React/TypeScript for now for:
-
-- Core workspace execution UI.
-- Chat composer and rich text editing.
-- Terminal.
-- Kanban drag/drop.
-- Diff and log rendering until stream and virtualization behavior is proven.
-- Remote relay/WebRTC transport until a shared facade exists.
-
-The migration is feasible, but the economic case depends on whether the project
-wants Rust to own the frontend product platform, not just some UI components. If
-the goal is only smaller pockets of Rust UI, Dioxus islands are enough. If the
-goal is a Rust-first frontend, plan for a staged shell inversion and budget the
-workspace runtime as the main cost center.
+The economic case for this migration rests on the desire for a more robust, performant, and unified (Rust-first) frontend platform. If the primary goal is simply to use Rust for a few UI components, then stopping at the "Dioxus Islands" stage is a valid and much lower-cost option. If the ambition is a full architectural evolution, then the phased rewrite is the recommended path forward.

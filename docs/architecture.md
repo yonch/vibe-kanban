@@ -385,36 +385,9 @@ plain text and stderr-oriented output, including login and setup errors.
 
 ## Frontend architecture
 
-The frontend has thin app entrypoints and a larger shared UI package. `packages/local-web` provides the local Vite shell, TanStack Router route files, and app-level providers. `packages/remote-web` provides the cloud entrypoint. `packages/web-core` contains the shared features, dialogs, hooks, stores, API helpers, keyboard handling, onboarding, workspace UI, kanban UI, and shared layouts used by both app shells.
-
-```mermaid
-flowchart TB
-  LocalEntrypoint["Local entrypoint\npackages/local-web"]
-  RemoteEntrypoint["Remote entrypoint\npackages/remote-web"]
-  Router["TanStack Router\nroute files and generated tree"]
-  Providers["App providers\nhost, workspace, processes,\nlogs, actions, terminal, modals"]
-  WebCore["Shared UI library\npackages/web-core"]
-  Features["Feature modules\nkanban, workspace,\nworkspace chat, onboarding, export"]
-  Shared["Shared modules\ncomponents, dialogs, hooks,\nstores, keyboard, i18n"]
-  API["API helpers\nshared/lib/api.ts\nTanStack Query client"]
-  Types["Generated TypeScript types\nshared/types.ts\nshared/remote-types.ts"]
-  LocalAPI["Local backend API\n/api"]
-  RemoteAPI["Remote cloud API"]
-  Realtime["Realtime channels\nSSE, WebSocket, ElectricSQL"]
-
-  LocalEntrypoint --> Router
-  RemoteEntrypoint --> Router
-  Router --> Providers
-  Providers --> WebCore
-  WebCore --> Features
-  WebCore --> Shared
-  Features --> API
-  Shared --> API
-  API --> Types
-  API --> LocalAPI
-  API --> RemoteAPI
-  API --> Realtime
-```
+The detailed frontend architecture, including app shells, feature modules, local
+and remote entrypoints, connection ownership, and workspace data flows, lives in
+[Frontend architecture](frontend-architecture.md).
 
 ## Runtime flow
 

@@ -188,33 +188,47 @@ sequenceDiagram
   Route-->>UI: workspace, session, execution response
 ```
 
-### Execution logs and live updates
+### Execution logs, UI streams, and state events
 
-Execution output uses a per-process `MsgStore` before being normalised and
-persisted. Database writes then trigger SQLite hooks registered by
-`EventService`, which convert changed rows into JSON patches for the global
-SSE stream consumed by the frontend.
+Execution output uses a per-process `MsgStore` as the live fan-out point. Raw
+stdout and stderr are persisted to local JSONL files under the asset directory,
+while executor-specific normalisers read the same stream and push conversation
+patches back into the `MsgStore`. WebSocket listeners stream either raw-log
+patches or normalised conversation patches from that store. SQLite remains the
+source of durable execution metadata and the legacy fallback for logs migrated
+from older versions.
 
 ```mermaid
-flowchart LR
+flowchart TB
   Child["Agent or script child process"]
   Stdout["stdout/stderr streams"]
-  ProcessMsgStore["Per-execution MsgStore\nraw and normalised log entries"]
-  LogPersister["DB stream task\nexecution_process logs"]
-  DB[("SQLite\nexecution_processes,\nturns, scratch,\nworkspaces")]
+  ProcessMsgStore["Per-execution MsgStore\nraw chunks, session ids,\nmessage ids, JsonPatch entries"]
+  JsonlWriter["ExecutionLogWriter\nsessions/.../processes/{execution_id}.jsonl"]
+  Normalizer["Executor normaliser\nCodex, Claude, ACP, Cursor, etc."]
+  RawWS["/api/execution-processes/{id}/raw-logs/ws\nstdout/stderr as conversation patches"]
+  NormalizedWS["/api/execution-processes/{id}/normalized-logs/ws\nnormalised conversation patches"]
+  DB[("SQLite\nworkspace, session,\nexecution_process,\ncoding_agent_turn metadata")]
   UpdateHook["SQLite update/preupdate hooks\nEventService::create_hook"]
-  GlobalMsgStore["EventService MsgStore\nhistory + live patches"]
-  SSE["GET /api/events\nSSE keep-alive stream"]
-  UI["Frontend query cache\nworkspace and process state"]
+  GlobalMsgStore["EventService MsgStore\nworkspace/process state patches"]
+  EventsSSE["GET /api/events\nSSE history + live stream"]
+  LegacyLogs["Legacy execution_process_logs\nread fallback + startup migration"]
+  UI["Frontend listeners\nlogs, conversation,\nworkspace/process cache"]
 
   Child --> Stdout
   Stdout --> ProcessMsgStore
-  ProcessMsgStore --> LogPersister
-  LogPersister --> DB
+  ProcessMsgStore --> JsonlWriter
+  LegacyLogs -.->|"migrated to JSONL"| JsonlWriter
+  ProcessMsgStore --> Normalizer
+  Normalizer -->|"push JsonPatch"| ProcessMsgStore
+  ProcessMsgStore --> RawWS
+  ProcessMsgStore --> NormalizedWS
+  ProcessMsgStore -->|"SessionId/MessageId"| DB
   DB --> UpdateHook
   UpdateHook --> GlobalMsgStore
-  GlobalMsgStore --> SSE
-  SSE --> UI
+  GlobalMsgStore --> EventsSSE
+  RawWS --> UI
+  NormalizedWS --> UI
+  EventsSSE --> UI
   DB -->|"workspace status lookups"| UpdateHook
 ```
 
@@ -247,6 +261,127 @@ flowchart LR
   WorkspaceServer --> PreviewService
   PreviewService --> Browser
 ```
+
+## Executor architecture
+
+Executors are adapters around coding-agent CLIs and protocols. The backend
+stores the desired action as an `ExecutorAction`, resolves it through
+`ExecutorConfigs`, and then calls the `StandardCodingAgentExecutor` trait
+implemented by each agent. The container service owns process lifecycle,
+workspace paths, approval bridges, environment injection, log capture, and
+durable execution records.
+
+```mermaid
+flowchart TB
+  Request["Workspace request\ninitial prompt, follow-up,\nreview, script"]
+  ExecutorAction["ExecutorAction\ncoding agent or script"]
+  Profiles["ExecutorConfigs\nprofile, model, permissions,\nvariant overrides"]
+  Container["LocalContainerService\nstart_execution_inner"]
+  Trait["StandardCodingAgentExecutor trait\nspawn, spawn_follow_up,\nspawn_review,\nnormalize_logs,\ndiscover_options"]
+  Enum["CodingAgent enum\nenum_dispatch"]
+  Approvals["ExecutorApprovalBridge\nCodex, Claude, Gemini,\nQwen, Opencode"]
+  Env["ExecutionEnv\nrepo context, VK ids,\ncommit reminders"]
+  Child["SpawnedChild\nprocess group, exit signal,\ncancellation token"]
+  MsgStore["Per-execution MsgStore"]
+  Storage["JSONL execution log file"]
+  UIStreams["Raw and normalised\nWebSocket streams"]
+
+  Request --> ExecutorAction
+  ExecutorAction --> Profiles
+  Profiles --> Enum
+  Container --> Trait
+  Enum --> Trait
+  Container --> Approvals
+  Container --> Env
+  Trait -->|"spawn*()"| Child
+  Child -->|"stdout/stderr"| MsgStore
+  Trait -->|"normalize_logs()"| MsgStore
+  MsgStore --> Storage
+  MsgStore --> UIStreams
+```
+
+### Executor adapters
+
+Most adapters share the same container contract, but differ in how they launch
+the agent, resume sessions, request approvals, and translate native output into
+normalised conversation entries.
+
+```mermaid
+flowchart LR
+  subgraph Common["Common executor contract"]
+    Trait["StandardCodingAgentExecutor"]
+    CommandBuilder["CommandBuilder\nbase command + overrides"]
+    SpawnedChild["SpawnedChild\nAsyncGroupChild + optional\nexit/cancel channels"]
+    Normalized["ConversationPatch\nnormalised UI entries"]
+  end
+
+  subgraph Codex["Codex"]
+    CodexCmd["npx @openai/codex app-server"]
+    AppServer["AppServerClient\nJSON-RPC over stdin/stdout"]
+    CodexLog["LogWriter\nprotocol events, approvals,\nerrors as raw log lines"]
+    CodexParser["codex::normalize_logs\ncodex/event parser"]
+  end
+
+  subgraph Claude["Claude Code"]
+    ClaudeCmd["npx @anthropic-ai/claude-code\nor claude-code-router"]
+    ClaudeResume["--resume\n--resume-session-at"]
+    ClaudeJson["JSON stdout lines\nsession_id + message uuid"]
+    ClaudeParser["ClaudeLogProcessor\nstdout JSON + stderr parser"]
+  end
+
+  subgraph ACP["Gemini and ACP-style agents"]
+    AcpHarness["AcpAgentHarness\nsession protocol wrapper"]
+    AcpEvents["ACP stdout events\nsession, message, tool, error"]
+    AcpParser["acp::normalize_logs\nstreaming text + tool state"]
+  end
+
+  subgraph Cursor["Cursor"]
+    CursorCmd["Cursor agent command\ninitial + --resume"]
+    CursorTrust["MCP trust setup"]
+    CursorParser["Cursor normaliser\nplain text/stderr handling"]
+  end
+
+  Trait --> CommandBuilder
+  CommandBuilder --> CodexCmd
+  CommandBuilder --> ClaudeCmd
+  CommandBuilder --> AcpHarness
+  CommandBuilder --> CursorCmd
+  CodexCmd --> AppServer
+  AppServer --> CodexLog
+  CodexLog --> CodexParser
+  ClaudeCmd --> ClaudeResume
+  ClaudeResume --> ClaudeJson
+  ClaudeJson --> ClaudeParser
+  AcpHarness --> AcpEvents
+  AcpEvents --> AcpParser
+  CursorCmd --> CursorTrust
+  CursorTrust --> CursorParser
+  CodexParser --> Normalized
+  ClaudeParser --> Normalized
+  AcpParser --> Normalized
+  CursorParser --> Normalized
+  Trait --> SpawnedChild
+```
+
+Codex runs as an app-server subprocess and uses a JSON-RPC client inside the
+executor adapter. The adapter starts or forks Codex threads, forwards approval
+requests through Vibe Kanban's approval bridge, writes Codex protocol events
+back into the captured log stream, and normalises `codex/event` notifications
+for the conversation UI.
+
+Claude Code runs as a CLI process that emits structured JSON lines on stdout.
+The Claude adapter builds initial and resumed commands, supports
+`--resume-session-at` for resetting to a previous message, extracts Claude
+session and message identifiers from the JSON stream, and normalises both
+stdout JSON and stderr into conversation entries.
+
+Gemini uses the shared ACP harness and normaliser. The harness manages
+agent-client-protocol sessions, while the ACP normaliser turns session,
+message, tool-call, and error events into streaming conversation patches.
+
+Cursor follows the same trait contract with Cursor-specific command building,
+resume arguments, MCP trust setup, and log normalisation. Its normaliser handles
+plain text and stderr-oriented output, including login and setup errors.
 
 ## Frontend architecture
 
@@ -287,5 +422,5 @@ flowchart TB
 2. The frontend loads from the local server in production or from Vite in development.
 3. UI features call `/api` routes for projects, workspaces, sessions, git operations, previews, approvals, terminal access, and configuration.
 4. Backend routes delegate through the `Deployment` trait to database, git, filesystem, executor, event, preview, remote, and relay services.
-5. A workspace creates or reuses git worktrees, starts agent or script processes, stores execution metadata, and streams logs and state changes back to the UI.
+5. A workspace creates or reuses git worktrees, starts agent or script processes, stores execution metadata in SQLite, persists raw execution logs as JSONL files, and streams raw logs, normalised conversation patches, and state changes back to the UI.
 6. Optional cloud configuration enables remote project, issue, host pairing, relay, and sync flows through `crates/remote` and the relay crates.

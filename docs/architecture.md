@@ -258,6 +258,66 @@ operations, and push the patch into the `EventService` `MsgStore`. Filtered
 WebSocket routes then expose per-view slices of that patch bus, and `/api/events`
 exposes the same store as SSE for global consumers.
 
+#### EventService ownership, threading, and filtering
+
+The global state-event store is an in-memory `utils::MsgStore`, not a durable
+database table. `MsgStore` combines a bounded history buffer with a Tokio
+`broadcast::Sender<LogMsg>`. Calling `push_patch` appends the patch to history
+and broadcasts it to every current subscriber. New subscribers can therefore
+receive an initial in-memory replay through `history_plus_stream`, while live
+subscribers receive subsequent broadcasts through their own broadcast receiver.
+The history is process-local and bounded by bytes, so SQLite remains the durable
+source of truth for model state.
+
+`crates/local-deployment` creates the shared event `MsgStore` during
+`LocalDeployment::new`. It passes the same `Arc<MsgStore>` into
+`EventService::create_hook` before opening the hooked `DBService`, then stores
+it inside the long-lived `EventService`. `crates/services` owns the
+`EventService` type and the patch-building logic. `crates/server` does not write
+to the event store directly; routes ask the deployment for `events()` or
+`stream_events()` and turn the returned `LogMsg` stream into SSE or WebSocket
+frames.
+
+The only normal producers for this global event store are SQLite hooks installed
+by `EventService::create_hook`. The preupdate hook handles deletes while the old
+row values are still available, producing remove patches for `workspaces`,
+`execution_processes`, and `scratch`. The update hook handles inserts and
+updates. Because SQLite invokes the hook synchronously on the connection thread,
+the hook captures the current Tokio runtime handle and immediately spawns an
+async task. That task reloads the affected row by `rowid`, builds the JSON Patch,
+and calls `msg_store.push_patch`. Execution-process changes also trigger a
+derived workspace-status patch so workspace lists update when process state
+changes. This means the hook is the bridge from synchronous SQLite mutation
+notification into the async broadcast bus.
+
+Consumers register by subscribing to the store, not by registering with SQLite.
+`/api/events` uses `Deployment::stream_events`, which exposes the store's
+history plus live stream as SSE without view-specific filtering. The WebSocket
+routes for workspaces, execution processes, and scratch state call
+`EventService` stream helpers instead. Each helper first queries SQLite for a
+fresh snapshot, emits that snapshot as a `replace` patch, emits `Ready`, and
+then subscribes to the shared broadcast receiver for live patches.
+
+Filtering is owned by these `EventService` stream helpers in
+`crates/services/src/services/events/streams.rs`, with transport handled by
+`crates/server`. `stream_workspaces_raw` filters by patch path and optional
+`archived` state, converting some replacements to adds or removes so a filtered
+client cache stays coherent when a workspace enters or leaves the current view.
+`stream_execution_processes_for_session_raw` filters execution-process patches
+by `session_id` and `show_soft_deleted`; remove patches that cannot be
+session-verified are allowed through and the client cache ignores irrelevant
+ids. `stream_scratch_raw` filters `/scratch` patches by scratch id and scratch
+type embedded in the patch value. Frontend stores therefore receive view-shaped
+patch streams, while the global store itself remains a coarse event bus for all
+hooked table changes.
+
+This global `EventService` store is separate from the per-execution `MsgStore`
+instances kept by `LocalContainerService`. Per-execution stores are created when
+an execution process is started and are written by executor stdout/stderr
+forwarders and normalisers. They feed raw and normalised log WebSockets. The
+global event store only carries model-state patches derived from SQLite hook
+notifications.
+
 Running execution-log streams read from memory first. If the process still has a
 live `MsgStore`, both raw and normalised endpoints replay its in-memory history
 and then continue with live broadcast messages. Once the live store is gone, the

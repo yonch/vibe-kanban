@@ -13,17 +13,17 @@ The remote deployment adds organisation, issue, attachment, GitHub App, Electric
 flowchart LR
   User["User"]
   Browser["Browser or Tauri webview"]
-  LocalWeb["Local web app<br/>packages/local-web"]
-  WebCore["Shared React UI<br/>packages/web-core"]
-  Server["Local Axum server<br/>crates/server"]
-  Deployment["LocalDeployment<br/>crates/local-deployment"]
-  DB[("SQLite<br/>db.v2.sqlite")]
-  Worktrees["Git worktrees<br/>workspace-manager<br/>worktree-manager"]
-  Agents["Coding agents<br/>Claude, Codex, Gemini, Amp, etc."]
-  Preview["Preview proxy<br/>crates/preview-proxy"]
-  Remote["Remote API<br/>crates/remote"]
-  Relay["Relay services<br/>relay-* crates"]
-  GitHost["Git hosts<br/>GitHub and Azure Repos"]
+  LocalWeb["Local web app\npackages/local-web"]
+  WebCore["Shared React UI\npackages/web-core"]
+  Server["Local Axum server\ncrates/server"]
+  Deployment["LocalDeployment\ncrates/local-deployment"]
+  DB[("SQLite\ndb.v2.sqlite")]
+  Worktrees["Git worktrees\nworkspace-manager\nworktree-manager"]
+  Agents["Coding agents\nClaude, Codex, Gemini, Amp, etc."]
+  Preview["Preview proxy\ncrates/preview-proxy"]
+  Remote["Remote API\ncrates/remote"]
+  Relay["Relay services\nrelay-* crates"]
+  GitHost["Git hosts\nGitHub and Azure Repos"]
 
   User --> Browser
   Browser --> LocalWeb
@@ -47,20 +47,20 @@ The backend is split between transport, deployment wiring, service logic, and pe
 
 ```mermaid
 flowchart TB
-  Main["server binary<br/>crates/server/src/main.rs"]
-  Startup["startup.rs<br/>bind main and preview listeners"]
-  Router["routes/mod.rs<br/>Axum route tree"]
-  Middleware["middleware<br/>origin checks, relay signatures,<br/>error logging, compression"]
-  DeploymentTrait["Deployment trait<br/>crates/deployment"]
-  LocalDeployment["LocalDeployment<br/>crates/local-deployment"]
-  Services["Service layer<br/>crates/services"]
-  DBService["DBService<br/>crates/db + SQLx migrations"]
-  GitService["GitService<br/>crates/git"]
-  Executors["Executor profiles and runners<br/>crates/executors"]
-  Events["EventService<br/>SSE history + live stream"]
-  PreviewProxy["PreviewProxyService<br/>subdomain preview routes"]
-  RemoteClient["RemoteClient<br/>cloud API handoff and sync"]
-  RelayControl["Relay control, hosts,<br/>WebRTC, signing"]
+  Main["server binary\ncrates/server/src/main.rs"]
+  Startup["startup.rs\nbind main and preview listeners"]
+  Router["routes/mod.rs\nAxum route tree"]
+  Middleware["middleware\norigin checks, relay signatures,\nerror logging, compression"]
+  DeploymentTrait["Deployment trait\ncrates/deployment"]
+  LocalDeployment["LocalDeployment\ncrates/local-deployment"]
+  Services["Service layer\ncrates/services"]
+  DBService["DBService\ncrates/db + SQLx migrations"]
+  GitService["GitService\ncrates/git"]
+  Executors["Executor profiles and runners\ncrates/executors"]
+  Events["EventService\nSSE history + live stream"]
+  PreviewProxy["PreviewProxyService\nsubdomain preview routes"]
+  RemoteClient["RemoteClient\ncloud API handoff and sync"]
+  RelayControl["Relay control, hosts,\nWebRTC, signing"]
   Files["Filesystem and attachments"]
 
   Main --> Startup
@@ -86,18 +86,18 @@ The frontend has thin app entrypoints and a larger shared UI package. `packages/
 
 ```mermaid
 flowchart TB
-  LocalEntrypoint["Local entrypoint<br/>packages/local-web"]
-  RemoteEntrypoint["Remote entrypoint<br/>packages/remote-web"]
-  Router["TanStack Router<br/>route files and generated tree"]
-  Providers["App providers<br/>host, workspace, processes,<br/>logs, actions, terminal, modals"]
-  WebCore["Shared UI library<br/>packages/web-core"]
-  Features["Feature modules<br/>kanban, workspace,<br/>workspace chat, onboarding, export"]
-  Shared["Shared modules<br/>components, dialogs, hooks,<br/>stores, keyboard, i18n"]
-  API["API helpers<br/>shared/lib/api.ts<br/>TanStack Query client"]
-  Types["Generated TypeScript types<br/>shared/types.ts<br/>shared/remote-types.ts"]
-  LocalAPI["Local backend API<br/>/api"]
+  LocalEntrypoint["Local entrypoint\npackages/local-web"]
+  RemoteEntrypoint["Remote entrypoint\npackages/remote-web"]
+  Router["TanStack Router\nroute files and generated tree"]
+  Providers["App providers\nhost, workspace, processes,\nlogs, actions, terminal, modals"]
+  WebCore["Shared UI library\npackages/web-core"]
+  Features["Feature modules\nkanban, workspace,\nworkspace chat, onboarding, export"]
+  Shared["Shared modules\ncomponents, dialogs, hooks,\nstores, keyboard, i18n"]
+  API["API helpers\nshared/lib/api.ts\nTanStack Query client"]
+  Types["Generated TypeScript types\nshared/types.ts\nshared/remote-types.ts"]
+  LocalAPI["Local backend API\n/api"]
   RemoteAPI["Remote cloud API"]
-  Realtime["Realtime channels<br/>SSE, WebSocket, ElectricSQL"]
+  Realtime["Realtime channels\nSSE, WebSocket, ElectricSQL"]
 
   LocalEntrypoint --> Router
   RemoteEntrypoint --> Router

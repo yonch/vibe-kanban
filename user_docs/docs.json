@@ -25,7 +25,6 @@
         "pages": [
           "index",
           "getting-started",
-          "architecture",
           "browser-testing",
           "issue-management",
           "reviewing-code",

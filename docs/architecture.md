@@ -248,6 +248,74 @@ flowchart TB
   DB -->|"workspace status lookups"| UpdateHook
 ```
 
+The live execution-log stores are held by the container service, not by the
+individual executor adapters or by Axum. `crates/utils` defines the reusable
+`MsgStore` type. `crates/local-deployment` owns the concrete
+`LocalContainerService` instance with the `msg_stores` lookup map
+(`Arc<RwLock<HashMap<ExecutionProcessId, Arc<MsgStore>>>>`).
+`crates/services` exposes that map through the `ContainerService` trait and
+implements the common `get_msg_store_by_id`, `stream_raw_logs`, and
+`stream_normalized_logs` methods. Axum routes in `crates/server` call those
+trait methods through `Deployment::container()`, so the lookup path is shared
+across Codex, Claude, Cursor, ACP-style agents, scripts, and other executors.
+
+```mermaid
+flowchart TB
+  subgraph UtilsCrate["crates/utils"]
+    MsgStoreType["MsgStore\nbounded history + broadcast sender"]
+    LogMsg["LogMsg\nstdout, stderr, JsonPatch, finished"]
+  end
+
+  subgraph LocalDeploymentCrate["crates/local-deployment"]
+    LocalDeployment["LocalDeployment\nstartup-owned service graph"]
+    LocalContainer["LocalContainerService\nconcrete container service"]
+    StoreMap["msg_stores\nHashMap<ExecutionProcessId, Arc<MsgStore>>"]
+    ChildMaps["child_store, cancellation_tokens,\nDB stream handles, exit monitors"]
+  end
+
+  subgraph ServicesCrate["crates/services"]
+    ContainerTrait["ContainerService trait"]
+    ClaimExecution["claim_execution_with_idempotency_key\ncreates execution row + MsgStore"]
+    CommonLookup["get_msg_store_by_id\nstream_raw_logs\nstream_normalized_logs"]
+    Persistence["spawn_stream_raw_logs_to_storage\nsubscribes to same MsgStore"]
+  end
+
+  subgraph ExecutorsCrate["crates/executors"]
+    ExecutorTrait["StandardCodingAgentExecutor\nspawn + normalize_logs"]
+    ExecutorAdapters["Codex, Claude, Cursor,\nACP, scripts, etc."]
+  end
+
+  subgraph ServerCrate["crates/server"]
+    AxumRoutes["Axum routes\nexecution_processes.rs"]
+    RawRoute["raw-logs/ws"]
+    NormalizedRoute["normalized-logs/ws"]
+  end
+
+  LocalDeployment --> LocalContainer
+  LocalContainer --> StoreMap
+  LocalContainer --> ChildMaps
+  LocalContainer -.implements.-> ContainerTrait
+  StoreMap --> MsgStoreType
+  MsgStoreType --> LogMsg
+
+  ContainerTrait --> ClaimExecution
+  ContainerTrait --> CommonLookup
+  ContainerTrait --> Persistence
+  ClaimExecution -->|"insert execution_id -> Arc<MsgStore>"| StoreMap
+  Persistence -->|"subscribe for JSONL persistence"| StoreMap
+
+  ExecutorAdapters --> ExecutorTrait
+  ExecutorTrait -->|"spawn child"| LocalContainer
+  ExecutorTrait -->|"normalize_logs(Arc<MsgStore>)"| StoreMap
+  ChildMaps -->|"stdout/stderr forwarder"| StoreMap
+
+  AxumRoutes --> RawRoute
+  AxumRoutes --> NormalizedRoute
+  RawRoute -->|"Deployment::container().stream_raw_logs(id)"| CommonLookup
+  NormalizedRoute -->|"Deployment::container().stream_normalized_logs(id)"| CommonLookup
+  CommonLookup -->|"read execution_id"| StoreMap
+```
+
 The main listener split is:
 
 | Frontend listener | Endpoint and protocol | Payload shape | Intended data |

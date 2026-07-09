@@ -117,10 +117,12 @@ pub enum AskForApproval {
 #[serde(rename_all = "kebab-case")]
 #[strum(serialize_all = "kebab-case")]
 pub enum ReasoningEffort {
+    None,
     Low,
     Medium,
     High,
     Xhigh,
+    Max,
 }
 
 /// Model reasoning summary style
@@ -314,6 +316,17 @@ impl StandardCodingAgentExecutor for Codex {
         _workdir: Option<&std::path::Path>,
         _repo_path: Option<&std::path::Path>,
     ) -> Result<futures::stream::BoxStream<'static, json_patch::Patch>, ExecutorError> {
+        let full_reasoning_options = ReasoningOption::from_names(
+            [
+                ReasoningEffort::None,
+                ReasoningEffort::Low,
+                ReasoningEffort::Medium,
+                ReasoningEffort::High,
+                ReasoningEffort::Xhigh,
+                ReasoningEffort::Max,
+            ]
+            .map(|e| e.as_ref().to_string()),
+        );
         let xhigh_reasoning_options = ReasoningOption::from_names(
             [
                 ReasoningEffort::Low,
@@ -327,6 +340,24 @@ impl StandardCodingAgentExecutor for Codex {
         let options = ExecutorDiscoveredOptions {
             model_selector: ModelSelectorConfig {
                 models: vec![
+                    ModelInfo {
+                        id: "gpt-5.6-sol".to_string(),
+                        name: "GPT-5.6 Sol".to_string(),
+                        provider_id: None,
+                        reasoning_options: full_reasoning_options.clone(),
+                    },
+                    ModelInfo {
+                        id: "gpt-5.6-terra".to_string(),
+                        name: "GPT-5.6 Terra".to_string(),
+                        provider_id: None,
+                        reasoning_options: full_reasoning_options.clone(),
+                    },
+                    ModelInfo {
+                        id: "gpt-5.6-luna".to_string(),
+                        name: "GPT-5.6 Luna".to_string(),
+                        provider_id: None,
+                        reasoning_options: full_reasoning_options,
+                    },
                     ModelInfo {
                         id: "gpt-5.5".to_string(),
                         name: "GPT-5.5".to_string(),

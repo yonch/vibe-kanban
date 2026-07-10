@@ -230,6 +230,7 @@ impl AppServerClient {
                 cursor,
                 limit: None,
                 detail: Some(McpServerStatusDetail::ToolsAndAuthOnly),
+                thread_id: None,
             },
         };
         self.send_request(request, "mcpServerStatus/list").await
@@ -430,6 +431,8 @@ impl AppServerClient {
                 Ok(())
             }
             ServerRequest::ChatgptAuthTokensRefresh { .. }
+            | ServerRequest::AttestationGenerate { .. }
+            | ServerRequest::CurrentTimeRead { .. }
             | ServerRequest::McpServerElicitationRequest { .. }
             | ServerRequest::PermissionsRequestApproval { .. } => {
                 tracing::warn!("received unhandled v2 server request: {:?}", request);

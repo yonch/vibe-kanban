@@ -503,6 +503,8 @@ impl Codex {
             }
             None => None,
             Some(AskForApproval::UnlessTrusted) => Some(V2AskForApproval::UnlessTrusted),
+            // Codex app-server no longer supports OnFailure; OnRequest is the
+            // closest supported policy and is the more conservative fallback.
             Some(AskForApproval::OnFailure) => Some(V2AskForApproval::OnRequest),
             Some(AskForApproval::OnRequest) => Some(V2AskForApproval::OnRequest),
             Some(AskForApproval::Never) => Some(V2AskForApproval::Never),

@@ -20,12 +20,12 @@ use codex_app_server_protocol::{
     ReviewStartResponse, ReviewTarget, ServerRequest, ThreadCompactStartParams,
     ThreadCompactStartResponse, ThreadForkParams, ThreadForkResponse, ThreadItem, ThreadReadParams,
     ThreadReadResponse, ThreadStartParams, ThreadStartResponse, ToolRequestUserInputAnswer,
-    ToolRequestUserInputQuestion, ToolRequestUserInputResponse, TurnCompletedNotification,
-    TurnStartParams, TurnStartResponse, TurnStatus, UserInput,
+    ToolRequestUserInputQuestion, ToolRequestUserInputResponse, TurnStartParams, TurnStartResponse,
+    UserInput,
 };
 use codex_protocol::config_types::{CollaborationMode, ModeKind, Settings};
 use futures::TryFutureExt;
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{self, Value};
 use tokio::{
     io::{AsyncWrite, AsyncWriteExt, BufWriter},
@@ -43,6 +43,24 @@ use crate::{
 
 struct PendingPlan {
     item_id: String,
+}
+
+/// The fields needed to process a completed turn.
+///
+/// Keep this deliberately smaller than the app-server's full
+/// `TurnCompletedNotification`: the hook flow must remain compatible when
+/// Codex adds model-specific turn metadata or statuses that this bundled
+/// protocol version does not yet know about.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct TurnCompletion {
+    thread_id: String,
+    turn: CompletedTurn,
+}
+
+#[derive(Deserialize)]
+struct CompletedTurn {
+    status: Option<String>,
 }
 
 pub struct AppServerClient {
@@ -895,8 +913,11 @@ impl JsonRpcCallbacks for AppServerClient {
         if method == "turn/completed" {
             let Some(completed) = notification
                 .params
-                .and_then(|p| serde_json::from_value::<TurnCompletedNotification>(p).ok())
+                .and_then(|p| serde_json::from_value::<TurnCompletion>(p).ok())
             else {
+                tracing::warn!(
+                    "ignoring malformed Codex turn/completed notification; cannot run turn hooks"
+                );
                 return Ok(false);
             };
 
@@ -905,7 +926,7 @@ impl JsonRpcCallbacks for AppServerClient {
             }
 
             let mut keep_alive = false;
-            if completed.turn.status == TurnStatus::Interrupted {
+            if completed.turn.status.as_deref() == Some("interrupted") {
                 tracing::debug!("codex turn interrupted; flushing feedback queue");
                 if self.flush_pending_feedback().await {
                     keep_alive = true;
@@ -1071,5 +1092,23 @@ mod tests {
         // otherwise their `turn/completed` would terminate the parent
         // session prematurely.
         assert!(!client.is_primary_thread("subagent-thread").await);
+    }
+
+    #[test]
+    fn turn_completion_accepts_new_statuses_and_metadata() {
+        let completion: TurnCompletion = serde_json::from_value(serde_json::json!({
+            "threadId": "parent-thread",
+            "turn": {
+                "status": "waitingForHook",
+                "id": "turn-123",
+                "items": [],
+                "hookRuns": [{ "name": "post-turn" }]
+            },
+            "modelMetadata": { "model": "gpt-5.6-sol" }
+        }))
+        .expect("completion hooks must not depend on the complete turn schema");
+
+        assert_eq!(completion.thread_id, "parent-thread");
+        assert_eq!(completion.turn.status.as_deref(), Some("waitingForHook"));
     }
 }

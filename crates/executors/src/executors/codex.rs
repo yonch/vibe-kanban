@@ -31,6 +31,40 @@ pub(crate) fn resolve_model(model: Option<&str>) -> (Option<&str>, bool) {
     }
 }
 
+fn codex_reasoning_options(model: &str) -> Vec<ReasoningOption> {
+    let efforts = match model {
+        "gpt-5.6-sol" | "gpt-5.6-terra" => vec![
+            ReasoningEffort::None,
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::Xhigh,
+            ReasoningEffort::Max,
+            ReasoningEffort::Ultra,
+        ],
+        "gpt-5.6-luna" => vec![
+            ReasoningEffort::None,
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::Xhigh,
+            ReasoningEffort::Max,
+        ],
+        _ => vec![
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::Xhigh,
+        ],
+    };
+
+    ReasoningOption::from_names(
+        efforts
+            .into_iter()
+            .map(|effort| effort.as_ref().to_string()),
+    )
+}
+
 pub(crate) fn fork_params_from(thread_id: String, params: ThreadStartParams) -> ThreadForkParams {
     ThreadForkParams {
         thread_id,
@@ -122,6 +156,7 @@ pub enum ReasoningEffort {
     High,
     Xhigh,
     Max,
+    Ultra,
 }
 
 /// Model reasoning summary style
@@ -315,27 +350,6 @@ impl StandardCodingAgentExecutor for Codex {
         _workdir: Option<&std::path::Path>,
         _repo_path: Option<&std::path::Path>,
     ) -> Result<futures::stream::BoxStream<'static, json_patch::Patch>, ExecutorError> {
-        let full_reasoning_options = ReasoningOption::from_names(
-            [
-                ReasoningEffort::None,
-                ReasoningEffort::Low,
-                ReasoningEffort::Medium,
-                ReasoningEffort::High,
-                ReasoningEffort::Xhigh,
-                ReasoningEffort::Max,
-            ]
-            .map(|e| e.as_ref().to_string()),
-        );
-        let xhigh_reasoning_options = ReasoningOption::from_names(
-            [
-                ReasoningEffort::Low,
-                ReasoningEffort::Medium,
-                ReasoningEffort::High,
-                ReasoningEffort::Xhigh,
-            ]
-            .map(|e| e.as_ref().to_string()),
-        );
-
         let options = ExecutorDiscoveredOptions {
             model_selector: ModelSelectorConfig {
                 models: vec![
@@ -343,67 +357,67 @@ impl StandardCodingAgentExecutor for Codex {
                         id: "gpt-5.6-sol".to_string(),
                         name: "GPT-5.6 Sol".to_string(),
                         provider_id: None,
-                        reasoning_options: full_reasoning_options.clone(),
+                        reasoning_options: codex_reasoning_options("gpt-5.6-sol"),
                     },
                     ModelInfo {
                         id: "gpt-5.6-terra".to_string(),
                         name: "GPT-5.6 Terra".to_string(),
                         provider_id: None,
-                        reasoning_options: full_reasoning_options.clone(),
+                        reasoning_options: codex_reasoning_options("gpt-5.6-terra"),
                     },
                     ModelInfo {
                         id: "gpt-5.6-luna".to_string(),
                         name: "GPT-5.6 Luna".to_string(),
                         provider_id: None,
-                        reasoning_options: full_reasoning_options,
+                        reasoning_options: codex_reasoning_options("gpt-5.6-luna"),
                     },
                     ModelInfo {
                         id: "gpt-5.5".to_string(),
                         name: "GPT-5.5".to_string(),
                         provider_id: None,
-                        reasoning_options: xhigh_reasoning_options.clone(),
+                        reasoning_options: codex_reasoning_options("gpt-5.5"),
                     },
                     ModelInfo {
                         id: "gpt-5.5-fast".to_string(),
                         name: "GPT-5.5 Fast".to_string(),
                         provider_id: None,
-                        reasoning_options: xhigh_reasoning_options.clone(),
+                        reasoning_options: codex_reasoning_options("gpt-5.5-fast"),
                     },
                     ModelInfo {
                         id: "gpt-5.4".to_string(),
                         name: "GPT-5.4".to_string(),
                         provider_id: None,
-                        reasoning_options: xhigh_reasoning_options.clone(),
+                        reasoning_options: codex_reasoning_options("gpt-5.4"),
                     },
                     ModelInfo {
                         id: "gpt-5.4-fast".to_string(),
                         name: "GPT-5.4 Fast".to_string(),
                         provider_id: None,
-                        reasoning_options: xhigh_reasoning_options.clone(),
+                        reasoning_options: codex_reasoning_options("gpt-5.4-fast"),
                     },
                     ModelInfo {
                         id: "gpt-5.4-mini".to_string(),
                         name: "GPT-5.4 Mini".to_string(),
                         provider_id: None,
-                        reasoning_options: xhigh_reasoning_options.clone(),
+                        reasoning_options: codex_reasoning_options("gpt-5.4-mini"),
                     },
                     ModelInfo {
                         id: "gpt-5.3-codex".to_string(),
                         name: "GPT-5.3 Codex".to_string(),
                         provider_id: None,
-                        reasoning_options: xhigh_reasoning_options.clone(),
+                        reasoning_options: codex_reasoning_options("gpt-5.3-codex"),
                     },
                     ModelInfo {
                         id: "gpt-5.3-codex-spark".to_string(),
                         name: "GPT-5.3 Codex Spark".to_string(),
                         provider_id: None,
-                        reasoning_options: xhigh_reasoning_options.clone(),
+                        reasoning_options: codex_reasoning_options("gpt-5.3-codex-spark"),
                     },
                     ModelInfo {
                         id: "gpt-5.2".to_string(),
                         name: "GPT-5.2".to_string(),
                         provider_id: None,
-                        reasoning_options: xhigh_reasoning_options,
+                        reasoning_options: codex_reasoning_options("gpt-5.2"),
                     },
                 ],
                 permissions: vec![
@@ -795,7 +809,35 @@ impl Codex {
 
 #[cfg(test)]
 mod tests {
-    use super::resolve_model;
+    use super::{codex_reasoning_options, resolve_model};
+
+    #[test]
+    fn codex_reasoning_options_are_model_specific() {
+        let expected_options = [
+            (
+                "gpt-5.6-sol",
+                vec!["none", "low", "medium", "high", "xhigh", "max", "ultra"],
+            ),
+            (
+                "gpt-5.6-terra",
+                vec!["none", "low", "medium", "high", "xhigh", "max", "ultra"],
+            ),
+            (
+                "gpt-5.6-luna",
+                vec!["none", "low", "medium", "high", "xhigh", "max"],
+            ),
+            ("gpt-5.5", vec!["low", "medium", "high", "xhigh"]),
+            ("gpt-5.2", vec!["low", "medium", "high", "xhigh"]),
+        ];
+
+        for (model, expected) in expected_options {
+            let actual = codex_reasoning_options(model)
+                .into_iter()
+                .map(|option| option.id)
+                .collect::<Vec<_>>();
+            assert_eq!(actual, expected, "unexpected reasoning options for {model}");
+        }
+    }
 
     #[test]
     fn resolve_model_detects_fast_suffix() {

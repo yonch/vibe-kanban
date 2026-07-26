@@ -108,10 +108,16 @@ export function WorkspacesLayout() {
       : 'create-mode-seed-default';
 
   const isMobile = useIsMobile();
-  const [mobileTab] = useMobileActiveTab();
+  const [mobileTab, setMobileTab] = useMobileActiveTab();
   const activeMobileTab =
     workspaceId || isCreateMode ? mobileTab : 'workspaces';
   const mainContainerRef = useRef<WorkspacesMainContainerHandle>(null);
+
+  useEffect(() => {
+    if (!workspaceId && !isCreateMode && mobileTab !== 'workspaces') {
+      setMobileTab('workspaces');
+    }
+  }, [isCreateMode, mobileTab, setMobileTab, workspaceId]);
 
   const handleScrollToBottom = useCallback(
     (behavior: 'auto' | 'smooth' = 'smooth') => {

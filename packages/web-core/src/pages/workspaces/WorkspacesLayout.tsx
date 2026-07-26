@@ -109,6 +109,8 @@ export function WorkspacesLayout() {
 
   const isMobile = useIsMobile();
   const [mobileTab] = useMobileActiveTab();
+  const activeMobileTab =
+    workspaceId || isCreateMode ? mobileTab : 'workspaces';
   const mainContainerRef = useRef<WorkspacesMainContainerHandle>(null);
 
   const handleScrollToBottom = useCallback(
@@ -216,7 +218,7 @@ export function WorkspacesLayout() {
             <div
               className={cn(
                 'flex-1 min-h-0 overflow-hidden',
-                mobileTab !== 'workspaces' && 'hidden'
+                activeMobileTab !== 'workspaces' && 'hidden'
               )}
             >
               <WorkspacesSidebarContainer
@@ -228,7 +230,7 @@ export function WorkspacesLayout() {
             <div
               className={cn(
                 'flex-1 min-h-0 overflow-hidden',
-                mobileTab !== 'chat' && 'hidden'
+                activeMobileTab !== 'chat' && 'hidden'
               )}
             >
               {isCreateMode ? (
@@ -256,7 +258,7 @@ export function WorkspacesLayout() {
             <div
               className={cn(
                 'flex-1 min-h-0 overflow-hidden',
-                mobileTab !== 'changes' && 'hidden'
+                activeMobileTab !== 'changes' && 'hidden'
               )}
             >
               {selectedWorkspace?.id && (
@@ -271,7 +273,7 @@ export function WorkspacesLayout() {
             <div
               className={cn(
                 'flex-1 min-h-0 overflow-hidden',
-                mobileTab !== 'logs' && 'hidden'
+                activeMobileTab !== 'logs' && 'hidden'
               )}
             >
               <LogsContentContainer className="" />
@@ -281,7 +283,7 @@ export function WorkspacesLayout() {
             <div
               className={cn(
                 'flex-1 min-h-0 overflow-hidden',
-                mobileTab !== 'preview' && 'hidden'
+                activeMobileTab !== 'preview' && 'hidden'
               )}
             >
               {selectedWorkspace?.id && (
@@ -296,7 +298,7 @@ export function WorkspacesLayout() {
             <div
               className={cn(
                 'flex-1 min-h-0 overflow-hidden',
-                mobileTab !== 'git' && 'hidden'
+                activeMobileTab !== 'git' && 'hidden'
               )}
             >
               {selectedWorkspace && !isCreateMode && (

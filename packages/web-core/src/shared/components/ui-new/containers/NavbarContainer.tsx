@@ -283,6 +283,7 @@ export function NavbarContainer({
       }
       mobileActiveTab={mobileActiveTab as MobileTabId}
       onMobileTabChange={(tab) => setMobileActiveTab(tab)}
+      showMobileTabs={!!selectedWorkspace || isCreateMode}
       leftSlot={
         !breadcrumbs &&
         !isWaitingForBreadcrumbData &&

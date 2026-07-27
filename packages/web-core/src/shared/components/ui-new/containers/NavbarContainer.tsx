@@ -44,7 +44,11 @@ export function NavbarContainer({
 }) {
   const { t } = useTranslation('common');
   const { executeAction } = useActions();
-  const { workspace: selectedWorkspace, isCreateMode } = useWorkspaceContext();
+  const {
+    workspace: selectedWorkspace,
+    workspaceId,
+    isCreateMode,
+  } = useWorkspaceContext();
   const { workspaces } = useUserContext();
   const syncErrorContext = useSyncErrorContext();
   const { remoteAuthDegraded } = useUserSystem();
@@ -283,6 +287,7 @@ export function NavbarContainer({
       }
       mobileActiveTab={mobileActiveTab as MobileTabId}
       onMobileTabChange={(tab) => setMobileActiveTab(tab)}
+      showMobileTabs={!!workspaceId || isCreateMode}
       leftSlot={
         !breadcrumbs &&
         !isWaitingForBreadcrumbData &&

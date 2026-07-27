@@ -113,18 +113,23 @@ export function WorkspacesLayout() {
     workspaceId || isCreateMode ? mobileTab : 'workspaces';
   const mainContainerRef = useRef<WorkspacesMainContainerHandle>(null);
   const previousWorkspaceIdRef = useRef<string | undefined>(undefined);
+  const previousIsCreateModeRef = useRef(false);
 
   useEffect(() => {
     const enteredWorkspace =
       workspaceId && workspaceId !== previousWorkspaceIdRef.current;
+    const enteredCreateMode = isCreateMode && !previousIsCreateModeRef.current;
 
     if (enteredWorkspace && mobileTab !== 'chat') {
+      setMobileTab('chat');
+    } else if (enteredCreateMode && mobileTab !== 'chat') {
       setMobileTab('chat');
     } else if (!workspaceId && !isCreateMode && mobileTab !== 'workspaces') {
       setMobileTab('workspaces');
     }
 
     previousWorkspaceIdRef.current = workspaceId;
+    previousIsCreateModeRef.current = isCreateMode;
   }, [isCreateMode, mobileTab, setMobileTab, workspaceId]);
 
   const handleScrollToBottom = useCallback(

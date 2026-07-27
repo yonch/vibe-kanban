@@ -44,21 +44,44 @@ pub struct Gemini {
     pub approvals: Option<Arc<dyn ExecutorApprovalService>>,
 }
 
+fn get_gemini_base_command() -> &'static str {
+    let has_gemini = std::process::Command::new("gemini")
+        .arg("--version")
+        .output()
+        .map(|o| o.status.success())
+        .unwrap_or(false);
+
+    if has_gemini {
+        "gemini"
+    } else {
+        "npx -y @google/gemini-cli@0.29.3"
+    }
+}
+
 impl Gemini {
     fn build_command_builder(&self) -> Result<CommandBuilder, CommandBuildError> {
-        let mut builder = CommandBuilder::new("npx -y @google/gemini-cli@0.29.3");
+        let base_command = get_gemini_base_command();
+        let mut builder = CommandBuilder::new(base_command);
 
         if let Some(model) = &self.model {
             builder = builder.extend_params(["--model", model.as_str()]);
         }
 
-        if self.yolo.unwrap_or(false) {
-            builder = builder.extend_params(["--yolo"]);
-            builder = builder.extend_params(["--allowed-tools", "run_shell_command"]);
-            builder = builder.extend_params(["--sandbox", "false"]);
+        if base_command == "gemini" {
+            if self.yolo.unwrap_or(false) {
+                builder = builder.extend_params(["--yolo"]);
+                builder = builder.extend_params(["--sandbox", "false"]);
+                builder = builder.extend_params(["--skip-trust"]);
+            }
+            builder = builder.extend_params(["--acp"]);
+        } else {
+            if self.yolo.unwrap_or(false) {
+                builder = builder.extend_params(["--yolo"]);
+                builder = builder.extend_params(["--allowed-tools", "run_shell_command"]);
+                builder = builder.extend_params(["--sandbox", "false"]);
+            }
+            builder = builder.extend_params(["--experimental-acp"]);
         }
-
-        builder = builder.extend_params(["--experimental-acp"]);
 
         apply_overrides(builder, &self.cmd)
     }

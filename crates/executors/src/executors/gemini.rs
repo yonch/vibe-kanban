@@ -44,44 +44,21 @@ pub struct Gemini {
     pub approvals: Option<Arc<dyn ExecutorApprovalService>>,
 }
 
-fn get_gemini_base_command() -> &'static str {
-    let has_gemini = std::process::Command::new("gemini")
-        .arg("--version")
-        .output()
-        .map(|o| o.status.success())
-        .unwrap_or(false);
-
-    if has_gemini {
-        "gemini"
-    } else {
-        "npx -y @google/gemini-cli@0.29.3"
-    }
-}
-
 impl Gemini {
     fn build_command_builder(&self) -> Result<CommandBuilder, CommandBuildError> {
-        let base_command = get_gemini_base_command();
-        let mut builder = CommandBuilder::new(base_command);
+        let mut builder = CommandBuilder::new("npx -y @google/gemini-cli@0.50.0");
 
         if let Some(model) = &self.model {
             builder = builder.extend_params(["--model", model.as_str()]);
         }
 
-        if base_command == "gemini" {
-            if self.yolo.unwrap_or(false) {
-                builder = builder.extend_params(["--yolo"]);
-                builder = builder.extend_params(["--sandbox", "false"]);
-                builder = builder.extend_params(["--skip-trust"]);
-            }
-            builder = builder.extend_params(["--acp"]);
-        } else {
-            if self.yolo.unwrap_or(false) {
-                builder = builder.extend_params(["--yolo"]);
-                builder = builder.extend_params(["--allowed-tools", "run_shell_command"]);
-                builder = builder.extend_params(["--sandbox", "false"]);
-            }
-            builder = builder.extend_params(["--experimental-acp"]);
+        if self.yolo.unwrap_or(false) {
+            builder = builder.extend_params(["--yolo"]);
+            builder = builder.extend_params(["--sandbox", "false"]);
+            builder = builder.extend_params(["--skip-trust"]);
         }
+
+        builder = builder.extend_params(["--acp"]);
 
         apply_overrides(builder, &self.cmd)
     }
@@ -256,5 +233,90 @@ impl StandardCodingAgentExecutor for Gemini {
         Ok(Box::pin(futures::stream::once(async move {
             patch::executor_discovered_options(options)
         })))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_gemini_command_builder_default() {
+        let gemini = Gemini {
+            append_prompt: AppendPrompt::default(),
+            model: None,
+            yolo: None,
+            cmd: CmdOverrides::default(),
+            approvals: None,
+        };
+
+        let builder = gemini.build_command_builder().unwrap();
+        assert_eq!(builder.base, "npx -y @google/gemini-cli@0.50.0");
+        assert_eq!(builder.params, Some(vec!["--acp".to_string()]));
+    }
+
+    #[test]
+    fn test_gemini_command_builder_yolo() {
+        let gemini = Gemini {
+            append_prompt: AppendPrompt::default(),
+            model: Some("gemini-3.1-pro-preview".to_string()),
+            yolo: Some(true),
+            cmd: CmdOverrides::default(),
+            approvals: None,
+        };
+
+        let builder = gemini.build_command_builder().unwrap();
+        assert_eq!(builder.base, "npx -y @google/gemini-cli@0.50.0");
+        assert_eq!(
+            builder.params,
+            Some(
+                vec![
+                    "--model",
+                    "gemini-3.1-pro-preview",
+                    "--yolo",
+                    "--sandbox",
+                    "false",
+                    "--skip-trust",
+                    "--acp",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+            )
+        );
+    }
+
+    #[test]
+    fn test_gemini_command_builder_override() {
+        let gemini = Gemini {
+            append_prompt: AppendPrompt::default(),
+            model: None,
+            yolo: Some(true),
+            cmd: CmdOverrides {
+                base_command_override: Some("gemini".to_string()),
+                additional_params: Some(vec!["--custom-arg".to_string()]),
+                env: None,
+            },
+            approvals: None,
+        };
+
+        let builder = gemini.build_command_builder().unwrap();
+        assert_eq!(builder.base, "gemini");
+        assert_eq!(
+            builder.params,
+            Some(
+                vec![
+                    "--yolo",
+                    "--sandbox",
+                    "false",
+                    "--skip-trust",
+                    "--acp",
+                    "--custom-arg",
+                ]
+                .into_iter()
+                .map(str::to_string)
+                .collect()
+            )
+        );
     }
 }

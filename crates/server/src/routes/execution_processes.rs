@@ -449,6 +449,7 @@ async fn wait_for_executions_with_pool(
 
     let mut retry_at = None;
     let mut retry_delay = Duration::from_millis(100);
+    let mut retry_until_terminal = false;
     match find_completed_execution(pool, &request.execution_ids).await {
         Ok(Some(response)) => return Ok(response),
         Ok(None) => {}
@@ -504,6 +505,7 @@ async fn wait_for_executions_with_pool(
                 Ok(_) => {
                     // Completion notifications are sent after the terminal
                     // update commits, so this read normally succeeds once.
+                    retry_until_terminal = true;
                     match find_completed_execution(pool, &request.execution_ids).await {
                         Ok(Some(response)) => return Ok(response),
                         Ok(None) => {
@@ -522,11 +524,14 @@ async fn wait_for_executions_with_pool(
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(_)) => {
-                    // Reconcile once because a requested completion may have
+                    // Keep reconciling because a requested completion may have
                     // been among the dropped notifications.
+                    retry_until_terminal = true;
                     match find_completed_execution(pool, &request.execution_ids).await {
                         Ok(Some(response)) => return Ok(response),
-                        Ok(None) => {}
+                        Ok(None) => {
+                            schedule_database_retry(&mut retry_at, &mut retry_delay);
+                        }
                         Err(error) => {
                             tracing::warn!(
                                 error = ?error,
@@ -548,9 +553,13 @@ async fn wait_for_executions_with_pool(
                 match find_completed_execution(pool, &request.execution_ids).await {
                     Ok(Some(response)) => return Ok(response),
                     Ok(None) => {
-                        // The database recovered. Return to notification-only
-                        // waiting without scheduling another read.
-                        retry_delay = Duration::from_millis(100);
+                        if retry_until_terminal {
+                            schedule_database_retry(&mut retry_at, &mut retry_delay);
+                        } else {
+                            // The database recovered. Return to notification-only
+                            // waiting without scheduling another read.
+                            retry_delay = Duration::from_millis(100);
+                        }
                     }
                     Err(error) => {
                         tracing::warn!(
@@ -824,6 +833,61 @@ mod tests {
 
         completion_tx.send(execution_id).unwrap();
         let response = wait.await.unwrap().unwrap();
+        assert_eq!(response.completed_execution_id, execution_id);
+        assert_eq!(response.status, "completed");
+    }
+
+    #[tokio::test]
+    async fn completion_miss_keeps_reconciling_until_terminal_state_is_visible() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        create_wait_test_schema(&pool).await;
+
+        let execution_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        insert_execution(&pool, execution_id, session_id, "running").await;
+
+        let (completion_tx, completion_rx) = broadcast::channel(16);
+        let wait = tokio::spawn({
+            let pool = pool.clone();
+            async move {
+                wait_for_executions_with_pool(
+                    &pool,
+                    completion_rx,
+                    WaitForExecutionsRequest {
+                        execution_ids: vec![execution_id],
+                        timeout_seconds: 60,
+                    },
+                )
+                .await
+            }
+        });
+        tokio::task::yield_now().await;
+
+        completion_tx.send(execution_id).unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        let now = Utc::now();
+        sqlx::query(
+            "UPDATE execution_processes
+             SET status = 'completed', exit_code = 0, completed_at = ?, updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(now)
+        .bind(now)
+        .bind(execution_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let response = tokio::time::timeout(Duration::from_secs(1), wait)
+            .await
+            .expect("reconciliation should continue after the first quiet read")
+            .unwrap()
+            .unwrap();
         assert_eq!(response.completed_execution_id, execution_id);
         assert_eq!(response.status, "completed");
     }

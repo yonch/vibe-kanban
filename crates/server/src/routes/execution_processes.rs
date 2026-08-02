@@ -603,7 +603,10 @@ mod tests {
     use std::time::Duration;
 
     use chrono::Utc;
-    use db::models::coding_agent_turn::CodingAgentTurn;
+    use db::{
+        DBService,
+        models::{coding_agent_turn::CodingAgentTurn, execution_process::ExecutionProcessStatus},
+    };
     use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
     use tokio::sync::broadcast;
     use uuid::Uuid;
@@ -711,12 +714,12 @@ mod tests {
 
         let execution_id = Uuid::new_v4();
         let session_id = Uuid::new_v4();
-        let now = Utc::now();
         insert_execution(&pool, execution_id, session_id, "running").await;
 
-        let (completion_tx, completion_rx) = broadcast::channel(16);
+        let db = DBService::from_pool(pool);
+        let completion_rx = db.subscribe_execution_completions();
         let wait = tokio::spawn({
-            let pool = pool.clone();
+            let pool = db.pool.clone();
             async move {
                 wait_for_executions_with_pool(
                     &pool,
@@ -732,18 +735,9 @@ mod tests {
         tokio::task::yield_now().await;
         assert!(!wait.is_finished());
 
-        sqlx::query(
-            "UPDATE execution_processes
-             SET status = 'completed', exit_code = 0, completed_at = ?, updated_at = ?
-             WHERE id = ?",
-        )
-        .bind(now)
-        .bind(now)
-        .bind(execution_id)
-        .execute(&pool)
-        .await
-        .unwrap();
-        completion_tx.send(execution_id).unwrap();
+        db.update_execution_completion(execution_id, ExecutionProcessStatus::Completed, Some(0))
+            .await
+            .unwrap();
 
         let response = tokio::time::timeout(Duration::from_secs(1), wait)
             .await

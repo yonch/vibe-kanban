@@ -120,7 +120,7 @@ impl DBService {
         Ok(DBService::from_pool(pool))
     }
 
-    fn from_pool(pool: Pool<Sqlite>) -> Self {
+    pub fn from_pool(pool: Pool<Sqlite>) -> Self {
         let (execution_completions, _) = broadcast::channel(1024);
         Self {
             pool,

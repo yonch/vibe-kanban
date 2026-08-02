@@ -459,7 +459,7 @@ impl ExecutionProcess {
     }
 
     /// Update execution process status and completion info
-    pub async fn update_completion(
+    pub(crate) async fn update_completion(
         pool: &SqlitePool,
         id: Uuid,
         status: ExecutionProcessStatus,
@@ -471,7 +471,7 @@ impl ExecutionProcess {
             Some(Utc::now())
         };
 
-        sqlx::query!(
+        let result = sqlx::query!(
             r#"UPDATE execution_processes
                SET status = $1, exit_code = $2, completed_at = $3
                WHERE id = $4"#,
@@ -482,6 +482,10 @@ impl ExecutionProcess {
         )
         .execute(pool)
         .await?;
+
+        if result.rows_affected() == 0 {
+            return Err(sqlx::Error::RowNotFound);
+        }
 
         Ok(())
     }

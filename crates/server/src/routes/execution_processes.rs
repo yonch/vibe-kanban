@@ -740,6 +740,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn healthy_wait_does_not_reconcile_without_notification() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        create_wait_test_schema(&pool).await;
+
+        let execution_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        insert_execution(&pool, execution_id, session_id, "running").await;
+
+        let (completion_tx, completion_rx) = broadcast::channel(16);
+        let wait = tokio::spawn({
+            let pool = pool.clone();
+            async move {
+                wait_for_executions_with_pool(
+                    &pool,
+                    completion_rx,
+                    WaitForExecutionsRequest {
+                        execution_ids: vec![execution_id],
+                        timeout_seconds: 60,
+                    },
+                )
+                .await
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!wait.is_finished());
+
+        let now = Utc::now();
+        sqlx::query(
+            "UPDATE execution_processes
+             SET status = 'completed', exit_code = 0, completed_at = ?, updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(now)
+        .bind(now)
+        .bind(execution_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // The former implementation polled every 500 ms. Remaining pending
+        // beyond that interval proves a healthy wait needs a notification.
+        tokio::time::sleep(Duration::from_millis(750)).await;
+        assert!(
+            !wait.is_finished(),
+            "healthy wait must not discover completion through periodic reconciliation"
+        );
+
+        completion_tx.send(execution_id).unwrap();
+        let response = wait.await.unwrap().unwrap();
+        assert_eq!(response.completed_execution_id, execution_id);
+        assert_eq!(response.status, "completed");
+    }
+
+    #[tokio::test]
     async fn wait_for_executions_retries_only_after_database_error() {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)

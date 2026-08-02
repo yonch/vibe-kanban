@@ -182,3 +182,71 @@ impl DBService {
         Ok(pool)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use sqlx::sqlite::SqlitePoolOptions;
+
+    use super::*;
+
+    async fn execution_service() -> DBService {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE execution_processes (
+                id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                exit_code INTEGER,
+                completed_at TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        DBService::from_pool(pool)
+    }
+
+    #[tokio::test]
+    async fn completion_notification_is_visible_after_database_update() {
+        let db = execution_service().await;
+        let execution_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO execution_processes (id, status) VALUES (?, 'running')")
+            .bind(execution_id)
+            .execute(&db.pool)
+            .await
+            .unwrap();
+        let mut completions = db.subscribe_execution_completions();
+
+        db.update_execution_completion(execution_id, ExecutionProcessStatus::Completed, Some(0))
+            .await
+            .unwrap();
+
+        assert_eq!(completions.recv().await.unwrap(), execution_id);
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM execution_processes WHERE id = ?")
+                .bind(execution_id)
+                .fetch_one(&db.pool)
+                .await
+                .unwrap();
+        assert_eq!(status, "completed");
+    }
+
+    #[tokio::test]
+    async fn nonexistent_completion_update_fails_without_notification() {
+        let db = execution_service().await;
+        let mut completions = db.subscribe_execution_completions();
+
+        let result = db
+            .update_execution_completion(Uuid::new_v4(), ExecutionProcessStatus::Completed, Some(0))
+            .await;
+
+        assert!(matches!(result, Err(sqlx::Error::RowNotFound)));
+        assert!(matches!(
+            completions.try_recv(),
+            Err(broadcast::error::TryRecvError::Empty)
+        ));
+    }
+}

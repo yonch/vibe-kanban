@@ -5,7 +5,11 @@ use sqlx::{
     migrate::MigrateError,
     sqlite::{SqliteConnectOptions, SqliteConnection, SqliteJournalMode, SqlitePoolOptions},
 };
+use tokio::sync::broadcast;
 use utils::assets::asset_dir;
+use uuid::Uuid;
+
+use crate::models::execution_process::{ExecutionProcess, ExecutionProcessStatus};
 
 pub mod models;
 
@@ -70,6 +74,7 @@ async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), Error> {
 #[derive(Clone)]
 pub struct DBService {
     pub pool: Pool<Sqlite>,
+    execution_completions: broadcast::Sender<Uuid>,
 }
 
 impl DBService {
@@ -83,7 +88,7 @@ impl DBService {
             .journal_mode(SqliteJournalMode::Delete);
         let pool = SqlitePool::connect_with(options).await?;
         run_migrations(&pool).await?;
-        Ok(DBService { pool })
+        Ok(DBService::from_pool(pool))
     }
 
     pub async fn new_migration_pool() -> Result<Pool<Sqlite>, Error> {
@@ -112,7 +117,32 @@ impl DBService {
             + 'static,
     {
         let pool = Self::create_pool(Some(Arc::new(after_connect))).await?;
-        Ok(DBService { pool })
+        Ok(DBService::from_pool(pool))
+    }
+
+    fn from_pool(pool: Pool<Sqlite>) -> Self {
+        let (execution_completions, _) = broadcast::channel(1024);
+        Self {
+            pool,
+            execution_completions,
+        }
+    }
+
+    /// Subscribe to terminal execution updates. Notifications are published
+    /// only after the database update has completed successfully.
+    pub fn subscribe_execution_completions(&self) -> broadcast::Receiver<Uuid> {
+        self.execution_completions.subscribe()
+    }
+
+    pub async fn update_execution_completion(
+        &self,
+        id: Uuid,
+        status: ExecutionProcessStatus,
+        exit_code: Option<i64>,
+    ) -> Result<(), Error> {
+        ExecutionProcess::update_completion(&self.pool, id, status, exit_code).await?;
+        let _ = self.execution_completions.send(id);
+        Ok(())
     }
 
     async fn create_pool<F>(after_connect: Option<Arc<F>>) -> Result<Pool<Sqlite>, Error>

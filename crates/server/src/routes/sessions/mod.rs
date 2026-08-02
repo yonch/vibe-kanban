@@ -267,13 +267,14 @@ pub async fn follow_up(
                         .write()
                         .await
                         .remove(&execution_process.id);
-                    if let Err(update_error) = ExecutionProcess::update_completion(
-                        pool,
-                        execution_process.id,
-                        ExecutionProcessStatus::Failed,
-                        None,
-                    )
-                    .await
+                    if let Err(update_error) = deployment
+                        .db()
+                        .update_execution_completion(
+                            execution_process.id,
+                            ExecutionProcessStatus::Failed,
+                            None,
+                        )
+                        .await
                     {
                         tracing::error!(
                             "Failed to mark execution process {} as failed after reset error: {}",

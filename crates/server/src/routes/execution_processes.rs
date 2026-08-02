@@ -17,6 +17,7 @@ use futures_util::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use services::services::container::ContainerService;
 use sqlx::SqlitePool;
+use tokio::sync::broadcast;
 use utils::{log_msg::LogMsg, response::ApiResponse};
 use uuid::Uuid;
 
@@ -395,16 +396,47 @@ async fn wait_for_executions(
     State(deployment): State<DeploymentImpl>,
     axum::Json(request): axum::Json<WaitForExecutionsRequest>,
 ) -> Result<ResponseJson<ApiResponse<WaitForExecutionsResponse>>, ApiError> {
-    let pool = &deployment.db().pool;
-    let response = wait_for_executions_with_pool(pool, request).await?;
+    // Subscribe before taking the initial snapshot so a completion committed
+    // during the query is queued for us instead of being missed.
+    let updates = deployment.db().subscribe_execution_completions();
+    let response = wait_for_executions_with_pool(&deployment.db().pool, updates, request).await?;
     Ok(ResponseJson(ApiResponse::success(response)))
+}
+
+async fn find_completed_execution(
+    pool: &SqlitePool,
+    execution_ids: &[Uuid],
+) -> Result<Option<WaitForExecutionsResponse>, sqlx::Error> {
+    let mut last_error = None;
+
+    for id in execution_ids {
+        match completed_wait_response(pool, *id).await {
+            Ok(Some(response)) => return Ok(Some(response)),
+            Ok(None) => {}
+            Err(error) => last_error = Some(error),
+        }
+    }
+
+    match last_error {
+        Some(error) => Err(error),
+        None => Ok(None),
+    }
+}
+
+fn schedule_database_retry(
+    retry_at: &mut Option<tokio::time::Instant>,
+    retry_delay: &mut std::time::Duration,
+) {
+    *retry_at = Some(tokio::time::Instant::now() + *retry_delay);
+    *retry_delay = (*retry_delay * 2).min(std::time::Duration::from_secs(5));
 }
 
 async fn wait_for_executions_with_pool(
     pool: &SqlitePool,
+    mut completions: broadcast::Receiver<Uuid>,
     request: WaitForExecutionsRequest,
 ) -> Result<WaitForExecutionsResponse, ApiError> {
-    use std::time::Duration;
+    use std::{future::pending, time::Duration};
 
     if request.execution_ids.is_empty() {
         return Err(ApiError::BadRequest(
@@ -414,53 +446,131 @@ async fn wait_for_executions_with_pool(
 
     let deadline =
         tokio::time::Instant::now() + Duration::from_secs(request.timeout_seconds.min(3600));
-    let poll_interval = Duration::from_millis(500);
+
+    let mut retry_at = None;
+    let mut retry_delay = Duration::from_millis(100);
+    let mut retry_until_terminal = false;
+    match find_completed_execution(pool, &request.execution_ids).await {
+        Ok(Some(response)) => return Ok(response),
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(
+                error = ?error,
+                "wait_for_executions initial snapshot failed; scheduling retry"
+            );
+            schedule_database_retry(&mut retry_at, &mut retry_delay);
+        }
+    }
 
     loop {
-        let mut poll_error = None;
+        let retry = async {
+            match retry_at {
+                Some(retry_at) => tokio::time::sleep_until(retry_at).await,
+                None => pending().await,
+            }
+        };
 
-        for id in &request.execution_ids {
-            match completed_wait_response(pool, *id).await {
-                Ok(Some(response)) => return Ok(response),
-                Ok(None) => {}
-                Err(error) => {
-                    tracing::warn!(
-                        execution_id = %id,
-                        error = ?error,
-                        "wait_for_executions poll failed; retrying until deadline"
-                    );
-                    poll_error = Some(error);
+        tokio::select! {
+            _ = tokio::time::sleep_until(deadline) => {
+                match find_completed_execution(pool, &request.execution_ids).await {
+                    Ok(Some(response)) => return Ok(response),
+                    Ok(None) => {}
+                    Err(error) => {
+                        tracing::warn!(
+                            error = ?error,
+                            "wait_for_executions deadline reconciliation failed"
+                        );
+                        return Err(ApiError::ServiceUnavailable(
+                            "Execution status is temporarily unavailable. Please retry."
+                                .to_string(),
+                        ));
+                    }
                 }
-            }
-        }
 
-        if tokio::time::Instant::now() + poll_interval > deadline {
-            if let Some(error) = poll_error {
-                tracing::warn!(
-                    error = ?error,
-                    "wait_for_executions deadline reached after database errors"
-                );
-                return Err(ApiError::ServiceUnavailable(
-                    "Execution status is temporarily unavailable. Please retry.".to_string(),
-                ));
+                return timeout_wait_response(pool, request.execution_ids[0])
+                    .await
+                    .map_err(|error| {
+                        tracing::warn!(
+                            error = ?error,
+                            "wait_for_executions timeout response failed"
+                        );
+                        ApiError::ServiceUnavailable(
+                            "Execution status is temporarily unavailable. Please retry."
+                                .to_string(),
+                        )
+                    });
             }
-
-            let first_id = request.execution_ids[0];
-            return match timeout_wait_response(pool, first_id).await {
-                Ok(response) => Ok(response),
-                Err(error) => {
-                    tracing::warn!(
-                        error = ?error,
-                        "wait_for_executions deadline reached after database errors"
-                    );
-                    Err(ApiError::ServiceUnavailable(
+            result = completions.recv() => match result {
+                Ok(execution_id) if !request.execution_ids.contains(&execution_id) => {}
+                Ok(_) => {
+                    // Completion notifications are sent after the terminal
+                    // update commits, so this read normally succeeds once.
+                    retry_until_terminal = true;
+                    match find_completed_execution(pool, &request.execution_ids).await {
+                        Ok(Some(response)) => return Ok(response),
+                        Ok(None) => {
+                            tracing::warn!(
+                                "wait_for_executions completion was not visible; scheduling retry"
+                            );
+                            schedule_database_retry(&mut retry_at, &mut retry_delay);
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                error = ?error,
+                                "wait_for_executions completion reconciliation failed; scheduling retry"
+                            );
+                            schedule_database_retry(&mut retry_at, &mut retry_delay);
+                        }
+                    }
+                }
+                Err(broadcast::error::RecvError::Lagged(_)) => {
+                    // Keep reconciling because a requested completion may have
+                    // been among the dropped notifications.
+                    retry_until_terminal = true;
+                    match find_completed_execution(pool, &request.execution_ids).await {
+                        Ok(Some(response)) => return Ok(response),
+                        Ok(None) => {
+                            schedule_database_retry(&mut retry_at, &mut retry_delay);
+                        }
+                        Err(error) => {
+                            tracing::warn!(
+                                error = ?error,
+                                "wait_for_executions lag reconciliation failed; scheduling retry"
+                            );
+                            schedule_database_retry(&mut retry_at, &mut retry_delay);
+                        }
+                    }
+                }
+                Err(broadcast::error::RecvError::Closed) => {
+                    tracing::warn!("wait_for_executions completion stream closed before the deadline");
+                    return Err(ApiError::ServiceUnavailable(
                         "Execution status is temporarily unavailable. Please retry.".to_string(),
-                    ))
+                    ));
                 }
-            };
+            },
+            _ = retry => {
+                retry_at = None;
+                match find_completed_execution(pool, &request.execution_ids).await {
+                    Ok(Some(response)) => return Ok(response),
+                    Ok(None) => {
+                        if retry_until_terminal {
+                            schedule_database_retry(&mut retry_at, &mut retry_delay);
+                        } else {
+                            // The database recovered. Return to notification-only
+                            // waiting without scheduling another read.
+                            retry_delay = Duration::from_millis(100);
+                        }
+                    }
+                    Err(error) => {
+                        tracing::warn!(
+                            error = ?error,
+                            "wait_for_executions database retry failed"
+                        );
+                        schedule_database_retry(&mut retry_at, &mut retry_delay);
+                    }
+                }
+            }
         }
-
-        tokio::time::sleep(poll_interval).await;
     }
 }
 
@@ -490,13 +600,19 @@ pub(super) fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
 
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use chrono::Utc;
-    use db::models::coding_agent_turn::CodingAgentTurn;
-    use sqlx::sqlite::SqlitePoolOptions;
+    use db::{
+        DBService,
+        models::{coding_agent_turn::CodingAgentTurn, execution_process::ExecutionProcessStatus},
+    };
+    use sqlx::{SqlitePool, sqlite::SqlitePoolOptions};
+    use tokio::sync::broadcast;
     use uuid::Uuid;
 
     use super::{
-        WaitForExecutionsRequest, coding_agent_turn_accepted_by_agent,
+        WaitForExecutionsRequest, coding_agent_turn_accepted_by_agent, find_completed_execution,
         wait_for_executions_with_pool,
     };
     use crate::error::ApiError;
@@ -525,17 +641,302 @@ mod tests {
         assert!(!coding_agent_turn_accepted_by_agent(None));
     }
 
+    async fn create_wait_test_schema(pool: &SqlitePool) {
+        sqlx::query(
+            "CREATE TABLE execution_processes (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                run_reason TEXT NOT NULL,
+                executor_action TEXT NOT NULL,
+                status TEXT NOT NULL,
+                exit_code INTEGER,
+                dropped INTEGER NOT NULL DEFAULT 0,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE coding_agent_turns (
+                id TEXT PRIMARY KEY,
+                execution_process_id TEXT NOT NULL,
+                agent_session_id TEXT,
+                agent_message_id TEXT,
+                prompt TEXT,
+                summary TEXT,
+                seen INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
+    async fn insert_execution(
+        pool: &SqlitePool,
+        execution_id: Uuid,
+        session_id: Uuid,
+        status: &str,
+    ) {
+        let now = Utc::now();
+        sqlx::query(
+            "INSERT INTO execution_processes (
+                id, session_id, run_reason, executor_action, status,
+                started_at, completed_at, created_at, updated_at
+            ) VALUES (?, ?, 'codingagent', '{}', ?, ?, ?, ?, ?)",
+        )
+        .bind(execution_id)
+        .bind(session_id)
+        .bind(status)
+        .bind(now)
+        .bind((status != "running").then_some(now))
+        .bind(now)
+        .bind(now)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+
     #[tokio::test]
-    async fn wait_for_executions_returns_unavailable_after_poll_errors_reach_deadline() {
+    async fn wait_for_executions_wakes_on_post_commit_completion() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        create_wait_test_schema(&pool).await;
+
+        let execution_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        insert_execution(&pool, execution_id, session_id, "running").await;
+
+        let db = DBService::from_pool(pool);
+        let completion_rx = db.subscribe_execution_completions();
+        let wait = tokio::spawn({
+            let pool = db.pool.clone();
+            async move {
+                wait_for_executions_with_pool(
+                    &pool,
+                    completion_rx,
+                    WaitForExecutionsRequest {
+                        execution_ids: vec![execution_id],
+                        timeout_seconds: 60,
+                    },
+                )
+                .await
+            }
+        });
+        tokio::task::yield_now().await;
+        assert!(!wait.is_finished());
+
+        db.update_execution_completion(execution_id, ExecutionProcessStatus::Completed, Some(0))
+            .await
+            .unwrap();
+
+        let response = tokio::time::timeout(Duration::from_secs(1), wait)
+            .await
+            .expect("wait should wake on the execution update")
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.completed_execution_id, execution_id);
+        assert_eq!(response.session_id, session_id);
+        assert_eq!(response.status, "completed");
+    }
+
+    #[tokio::test]
+    async fn completed_execution_is_returned_after_an_unreadable_execution() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        create_wait_test_schema(&pool).await;
+
+        let unreadable_id = Uuid::new_v4();
+        let completed_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        insert_execution(&pool, unreadable_id, session_id, "invalid-status").await;
+        insert_execution(&pool, completed_id, session_id, "completed").await;
+
+        let response = find_completed_execution(&pool, &[unreadable_id, completed_id])
+            .await
+            .expect("a later healthy completion should take precedence over a row error")
+            .expect("the completed execution should be returned");
+
+        assert_eq!(response.completed_execution_id, completed_id);
+        assert_eq!(response.status, "completed");
+    }
+
+    #[tokio::test]
+    async fn healthy_wait_does_not_reconcile_without_notification() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        create_wait_test_schema(&pool).await;
+
+        let execution_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        insert_execution(&pool, execution_id, session_id, "running").await;
+
+        let (completion_tx, completion_rx) = broadcast::channel(16);
+        let wait = tokio::spawn({
+            let pool = pool.clone();
+            async move {
+                wait_for_executions_with_pool(
+                    &pool,
+                    completion_rx,
+                    WaitForExecutionsRequest {
+                        execution_ids: vec![execution_id],
+                        timeout_seconds: 60,
+                    },
+                )
+                .await
+            }
+        });
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        assert!(!wait.is_finished());
+
+        let now = Utc::now();
+        sqlx::query(
+            "UPDATE execution_processes
+             SET status = 'completed', exit_code = 0, completed_at = ?, updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(now)
+        .bind(now)
+        .bind(execution_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        // The former implementation polled every 500 ms. Remaining pending
+        // beyond that interval proves a healthy wait needs a notification.
+        tokio::time::sleep(Duration::from_millis(750)).await;
+        assert!(
+            !wait.is_finished(),
+            "healthy wait must not discover completion through periodic reconciliation"
+        );
+
+        completion_tx.send(execution_id).unwrap();
+        let response = wait.await.unwrap().unwrap();
+        assert_eq!(response.completed_execution_id, execution_id);
+        assert_eq!(response.status, "completed");
+    }
+
+    #[tokio::test]
+    async fn completion_miss_keeps_reconciling_until_terminal_state_is_visible() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        create_wait_test_schema(&pool).await;
+
+        let execution_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        insert_execution(&pool, execution_id, session_id, "running").await;
+
+        let (completion_tx, completion_rx) = broadcast::channel(16);
+        let wait = tokio::spawn({
+            let pool = pool.clone();
+            async move {
+                wait_for_executions_with_pool(
+                    &pool,
+                    completion_rx,
+                    WaitForExecutionsRequest {
+                        execution_ids: vec![execution_id],
+                        timeout_seconds: 60,
+                    },
+                )
+                .await
+            }
+        });
+        tokio::task::yield_now().await;
+
+        completion_tx.send(execution_id).unwrap();
+        tokio::time::sleep(Duration::from_millis(150)).await;
+
+        let now = Utc::now();
+        sqlx::query(
+            "UPDATE execution_processes
+             SET status = 'completed', exit_code = 0, completed_at = ?, updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(now)
+        .bind(now)
+        .bind(execution_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let response = tokio::time::timeout(Duration::from_secs(1), wait)
+            .await
+            .expect("reconciliation should continue after the first quiet read")
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.completed_execution_id, execution_id);
+        assert_eq!(response.status, "completed");
+    }
+
+    #[tokio::test]
+    async fn wait_for_executions_retries_only_after_database_error() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        let execution_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        let (_completion_tx, completion_rx) = broadcast::channel(16);
+        let wait = tokio::spawn({
+            let pool = pool.clone();
+            async move {
+                wait_for_executions_with_pool(
+                    &pool,
+                    completion_rx,
+                    WaitForExecutionsRequest {
+                        execution_ids: vec![execution_id],
+                        timeout_seconds: 60,
+                    },
+                )
+                .await
+            }
+        });
+
+        tokio::time::sleep(Duration::from_millis(25)).await;
+        create_wait_test_schema(&pool).await;
+        insert_execution(&pool, execution_id, session_id, "completed").await;
+
+        let response = tokio::time::timeout(Duration::from_secs(1), wait)
+            .await
+            .expect("database-error retry should observe the completion")
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.completed_execution_id, execution_id);
+        assert_eq!(response.status, "completed");
+    }
+
+    #[tokio::test]
+    async fn wait_for_executions_returns_unavailable_after_database_errors_reach_deadline() {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
             .await
             .unwrap();
         pool.close().await;
+        let (_completion_tx, completion_rx) = broadcast::channel(16);
 
         let result = wait_for_executions_with_pool(
             &pool,
+            completion_rx,
             WaitForExecutionsRequest {
                 execution_ids: vec![Uuid::new_v4()],
                 timeout_seconds: 0,

@@ -547,8 +547,9 @@ impl LocalContainerService {
             }
 
             if !ExecutionProcess::was_stopped(&db.pool, exec_id).await
-                && let Err(e) =
-                    ExecutionProcess::update_completion(&db.pool, exec_id, status, exit_code).await
+                && let Err(e) = db
+                    .update_execution_completion(exec_id, status, exit_code)
+                    .await
             {
                 tracing::error!("Failed to update execution process completion: {}", e);
             }
@@ -1421,7 +1422,8 @@ impl ContainerService for LocalContainerService {
             None
         };
 
-        ExecutionProcess::update_completion(&self.db.pool, execution_process.id, status, exit_code)
+        self.db
+            .update_execution_completion(execution_process.id, status, exit_code)
             .await?;
 
         // Try graceful cancellation first, then force kill

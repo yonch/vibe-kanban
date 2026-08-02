@@ -285,13 +285,14 @@ pub trait ContainerService {
                 process.session_id
             );
             // Update the execution process status first
-            if let Err(e) = ExecutionProcess::update_completion(
-                &self.db().pool,
-                process.id,
-                ExecutionProcessStatus::Failed,
-                None, // No exit code for orphaned processes
-            )
-            .await
+            if let Err(e) = self
+                .db()
+                .update_execution_completion(
+                    process.id,
+                    ExecutionProcessStatus::Failed,
+                    None, // No exit code for orphaned processes
+                )
+                .await
             {
                 tracing::error!(
                     "Failed to update orphaned execution process {} status: {}",
@@ -1382,13 +1383,14 @@ pub trait ContainerService {
                 .await
                 .remove(&execution_process.id);
             // Mark process as failed
-            if let Err(update_error) = ExecutionProcess::update_completion(
-                &self.db().pool,
-                execution_process.id,
-                ExecutionProcessStatus::Failed,
-                None,
-            )
-            .await
+            if let Err(update_error) = self
+                .db()
+                .update_execution_completion(
+                    execution_process.id,
+                    ExecutionProcessStatus::Failed,
+                    None,
+                )
+                .await
             {
                 tracing::error!(
                     "Failed to mark execution process {} as failed after start error: {}",

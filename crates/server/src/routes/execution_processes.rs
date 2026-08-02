@@ -17,6 +17,7 @@ use futures_util::{StreamExt, TryStreamExt};
 use serde::{Deserialize, Serialize};
 use services::services::container::ContainerService;
 use sqlx::SqlitePool;
+use tokio::sync::broadcast;
 use utils::{log_msg::LogMsg, response::ApiResponse};
 use uuid::Uuid;
 
@@ -396,12 +397,46 @@ async fn wait_for_executions(
     axum::Json(request): axum::Json<WaitForExecutionsRequest>,
 ) -> Result<ResponseJson<ApiResponse<WaitForExecutionsResponse>>, ApiError> {
     let pool = &deployment.db().pool;
-    let response = wait_for_executions_with_pool(pool, request).await?;
+    // Subscribe before taking the initial snapshot so a completion committed
+    // during the query is queued for us instead of being missed.
+    let updates = deployment.events().msg_store().get_receiver();
+    let response = wait_for_executions_with_pool(pool, updates, request).await?;
     Ok(ResponseJson(ApiResponse::success(response)))
+}
+
+async fn find_completed_execution(
+    pool: &SqlitePool,
+    execution_ids: &[Uuid],
+) -> Result<Option<WaitForExecutionsResponse>, sqlx::Error> {
+    for id in execution_ids {
+        if let Some(response) = completed_wait_response(pool, *id).await? {
+            return Ok(Some(response));
+        }
+    }
+
+    Ok(None)
+}
+
+fn is_requested_execution_update(msg: &LogMsg, execution_ids: &[Uuid]) -> bool {
+    let LogMsg::JsonPatch(patch) = msg else {
+        return false;
+    };
+
+    patch.0.iter().any(|operation| {
+        operation
+            .path()
+            .strip_prefix("/execution_processes/")
+            .is_some_and(|updated_id| {
+                execution_ids
+                    .iter()
+                    .any(|execution_id| updated_id == execution_id.to_string())
+            })
+    })
 }
 
 async fn wait_for_executions_with_pool(
     pool: &SqlitePool,
+    mut updates: broadcast::Receiver<LogMsg>,
     request: WaitForExecutionsRequest,
 ) -> Result<WaitForExecutionsResponse, ApiError> {
     use std::time::Duration;
@@ -414,53 +449,74 @@ async fn wait_for_executions_with_pool(
 
     let deadline =
         tokio::time::Instant::now() + Duration::from_secs(request.timeout_seconds.min(3600));
-    let poll_interval = Duration::from_millis(500);
+
+    match find_completed_execution(pool, &request.execution_ids).await {
+        Ok(Some(response)) => return Ok(response),
+        Ok(None) => {}
+        Err(error) => {
+            tracing::warn!(
+                error = ?error,
+                "wait_for_executions initial snapshot failed; waiting for an update"
+            );
+        }
+    }
 
     loop {
-        let mut poll_error = None;
-
-        for id in &request.execution_ids {
-            match completed_wait_response(pool, *id).await {
-                Ok(Some(response)) => return Ok(response),
-                Ok(None) => {}
-                Err(error) => {
-                    tracing::warn!(
-                        execution_id = %id,
-                        error = ?error,
-                        "wait_for_executions poll failed; retrying until deadline"
-                    );
-                    poll_error = Some(error);
+        match tokio::time::timeout_at(deadline, updates.recv()).await {
+            Ok(Ok(msg)) if !is_requested_execution_update(&msg, &request.execution_ids) => {}
+            Ok(Ok(_)) | Ok(Err(broadcast::error::RecvError::Lagged(_))) => {
+                // A matching update may be non-terminal. A lagged receiver may
+                // have lost the terminal update, so both cases reconcile once.
+                match find_completed_execution(pool, &request.execution_ids).await {
+                    Ok(Some(response)) => return Ok(response),
+                    Ok(None) => {}
+                    Err(error) => {
+                        tracing::warn!(
+                            error = ?error,
+                            "wait_for_executions update reconciliation failed"
+                        );
+                    }
                 }
             }
-        }
-
-        if tokio::time::Instant::now() + poll_interval > deadline {
-            if let Some(error) = poll_error {
-                tracing::warn!(
-                    error = ?error,
-                    "wait_for_executions deadline reached after database errors"
-                );
+            Ok(Err(broadcast::error::RecvError::Closed)) => {
+                tracing::warn!("wait_for_executions event stream closed before the deadline");
                 return Err(ApiError::ServiceUnavailable(
                     "Execution status is temporarily unavailable. Please retry.".to_string(),
                 ));
             }
-
-            let first_id = request.execution_ids[0];
-            return match timeout_wait_response(pool, first_id).await {
-                Ok(response) => Ok(response),
-                Err(error) => {
-                    tracing::warn!(
-                        error = ?error,
-                        "wait_for_executions deadline reached after database errors"
-                    );
-                    Err(ApiError::ServiceUnavailable(
-                        "Execution status is temporarily unavailable. Please retry.".to_string(),
-                    ))
+            Err(_) => {
+                // Reconcile at the deadline in case an update hook failed or a
+                // notification was otherwise lost.
+                match find_completed_execution(pool, &request.execution_ids).await {
+                    Ok(Some(response)) => return Ok(response),
+                    Ok(None) => {}
+                    Err(error) => {
+                        tracing::warn!(
+                            error = ?error,
+                            "wait_for_executions deadline reconciliation failed"
+                        );
+                        return Err(ApiError::ServiceUnavailable(
+                            "Execution status is temporarily unavailable. Please retry."
+                                .to_string(),
+                        ));
+                    }
                 }
-            };
-        }
 
-        tokio::time::sleep(poll_interval).await;
+                return match timeout_wait_response(pool, request.execution_ids[0]).await {
+                    Ok(response) => Ok(response),
+                    Err(error) => {
+                        tracing::warn!(
+                            error = ?error,
+                            "wait_for_executions timeout response failed"
+                        );
+                        Err(ApiError::ServiceUnavailable(
+                            "Execution status is temporarily unavailable. Please retry."
+                                .to_string(),
+                        ))
+                    }
+                };
+            }
+        }
     }
 }
 
@@ -490,14 +546,17 @@ pub(super) fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
 
 #[cfg(test)]
 mod tests {
+    use std::{sync::Arc, time::Duration};
+
     use chrono::Utc;
     use db::models::coding_agent_turn::CodingAgentTurn;
     use sqlx::sqlite::SqlitePoolOptions;
+    use utils::{log_msg::LogMsg, msg_store::MsgStore};
     use uuid::Uuid;
 
     use super::{
         WaitForExecutionsRequest, coding_agent_turn_accepted_by_agent,
-        wait_for_executions_with_pool,
+        is_requested_execution_update, wait_for_executions_with_pool,
     };
     use crate::error::ApiError;
 
@@ -525,17 +584,156 @@ mod tests {
         assert!(!coding_agent_turn_accepted_by_agent(None));
     }
 
+    #[test]
+    fn execution_update_filter_only_matches_requested_processes() {
+        let requested_id = Uuid::new_v4();
+        let other_id = Uuid::new_v4();
+        let requested_patch = serde_json::from_value(serde_json::json!([{
+            "op": "replace",
+            "path": format!("/execution_processes/{requested_id}"),
+            "value": {}
+        }]))
+        .unwrap();
+        let other_patch = serde_json::from_value(serde_json::json!([{
+            "op": "replace",
+            "path": format!("/execution_processes/{other_id}"),
+            "value": {}
+        }]))
+        .unwrap();
+
+        assert!(is_requested_execution_update(
+            &LogMsg::JsonPatch(requested_patch),
+            &[requested_id]
+        ));
+        assert!(!is_requested_execution_update(
+            &LogMsg::JsonPatch(other_patch),
+            &[requested_id]
+        ));
+        assert!(!is_requested_execution_update(
+            &LogMsg::Ready,
+            &[requested_id]
+        ));
+    }
+
     #[tokio::test]
-    async fn wait_for_executions_returns_unavailable_after_poll_errors_reach_deadline() {
+    async fn wait_for_executions_wakes_on_matching_update() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE execution_processes (
+                id TEXT PRIMARY KEY,
+                session_id TEXT NOT NULL,
+                run_reason TEXT NOT NULL,
+                executor_action TEXT NOT NULL,
+                status TEXT NOT NULL,
+                exit_code INTEGER,
+                dropped INTEGER NOT NULL DEFAULT 0,
+                started_at TEXT NOT NULL,
+                completed_at TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        sqlx::query(
+            "CREATE TABLE coding_agent_turns (
+                id TEXT PRIMARY KEY,
+                execution_process_id TEXT NOT NULL,
+                agent_session_id TEXT,
+                agent_message_id TEXT,
+                prompt TEXT,
+                summary TEXT,
+                seen INTEGER NOT NULL DEFAULT 0,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let execution_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        let now = Utc::now();
+        sqlx::query(
+            "INSERT INTO execution_processes (
+                id, session_id, run_reason, executor_action, status,
+                started_at, created_at, updated_at
+            ) VALUES (?, ?, 'codingagent', '{}', 'running', ?, ?, ?)",
+        )
+        .bind(execution_id)
+        .bind(session_id)
+        .bind(now)
+        .bind(now)
+        .bind(now)
+        .execute(&pool)
+        .await
+        .unwrap();
+
+        let msg_store = Arc::new(MsgStore::new());
+        let wait = tokio::spawn({
+            let pool = pool.clone();
+            let updates = msg_store.get_receiver();
+            async move {
+                wait_for_executions_with_pool(
+                    &pool,
+                    updates,
+                    WaitForExecutionsRequest {
+                        execution_ids: vec![execution_id],
+                        timeout_seconds: 60,
+                    },
+                )
+                .await
+            }
+        });
+
+        sqlx::query(
+            "UPDATE execution_processes
+             SET status = 'completed', exit_code = 0, completed_at = ?, updated_at = ?
+             WHERE id = ?",
+        )
+        .bind(now)
+        .bind(now)
+        .bind(execution_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+        let patch = serde_json::from_value(serde_json::json!([{
+            "op": "replace",
+            "path": format!("/execution_processes/{execution_id}"),
+            "value": {}
+        }]))
+        .unwrap();
+        msg_store.push_patch(patch);
+
+        let response = tokio::time::timeout(Duration::from_secs(1), wait)
+            .await
+            .expect("wait should wake on the execution update")
+            .unwrap()
+            .unwrap();
+        assert_eq!(response.completed_execution_id, execution_id);
+        assert_eq!(response.session_id, session_id);
+        assert_eq!(response.status, "completed");
+    }
+
+    #[tokio::test]
+    async fn wait_for_executions_returns_unavailable_after_database_errors_reach_deadline() {
         let pool = SqlitePoolOptions::new()
             .max_connections(1)
             .connect("sqlite::memory:")
             .await
             .unwrap();
         pool.close().await;
+        let msg_store = MsgStore::new();
 
         let result = wait_for_executions_with_pool(
             &pool,
+            msg_store.get_receiver(),
             WaitForExecutionsRequest {
                 execution_ids: vec![Uuid::new_v4()],
                 timeout_seconds: 0,

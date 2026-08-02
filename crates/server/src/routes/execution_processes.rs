@@ -407,13 +407,20 @@ async fn find_completed_execution(
     pool: &SqlitePool,
     execution_ids: &[Uuid],
 ) -> Result<Option<WaitForExecutionsResponse>, sqlx::Error> {
+    let mut last_error = None;
+
     for id in execution_ids {
-        if let Some(response) = completed_wait_response(pool, *id).await? {
-            return Ok(Some(response));
+        match completed_wait_response(pool, *id).await {
+            Ok(Some(response)) => return Ok(Some(response)),
+            Ok(None) => {}
+            Err(error) => last_error = Some(error),
         }
     }
 
-    Ok(None)
+    match last_error {
+        Some(error) => Err(error),
+        None => Ok(None),
+    }
 }
 
 fn schedule_database_retry(
@@ -593,7 +600,7 @@ mod tests {
     use uuid::Uuid;
 
     use super::{
-        WaitForExecutionsRequest, coding_agent_turn_accepted_by_agent,
+        WaitForExecutionsRequest, coding_agent_turn_accepted_by_agent, find_completed_execution,
         wait_for_executions_with_pool,
     };
     use crate::error::ApiError;
@@ -736,6 +743,30 @@ mod tests {
             .unwrap();
         assert_eq!(response.completed_execution_id, execution_id);
         assert_eq!(response.session_id, session_id);
+        assert_eq!(response.status, "completed");
+    }
+
+    #[tokio::test]
+    async fn completed_execution_is_returned_after_an_unreadable_execution() {
+        let pool = SqlitePoolOptions::new()
+            .max_connections(1)
+            .connect("sqlite::memory:")
+            .await
+            .unwrap();
+        create_wait_test_schema(&pool).await;
+
+        let unreadable_id = Uuid::new_v4();
+        let completed_id = Uuid::new_v4();
+        let session_id = Uuid::new_v4();
+        insert_execution(&pool, unreadable_id, session_id, "invalid-status").await;
+        insert_execution(&pool, completed_id, session_id, "completed").await;
+
+        let response = find_completed_execution(&pool, &[unreadable_id, completed_id])
+            .await
+            .expect("a later healthy completion should take precedence over a row error")
+            .expect("the completed execution should be returned");
+
+        assert_eq!(response.completed_execution_id, completed_id);
         assert_eq!(response.status, "completed");
     }
 

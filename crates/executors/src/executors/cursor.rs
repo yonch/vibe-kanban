@@ -61,7 +61,7 @@ pub struct CursorAgent {
     pub force: Option<bool>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[schemars(
-        description = "auto, opus-4.7, opus-4.7-fast, opus-4.7-thinking, opus-4.7-thinking-fast, opus-4.6, sonnet-4.6, gpt-5.5, gpt-5.5-fast, gpt-5.4, gpt-5.4-fast, gpt-5.4-mini, gpt-5.4-nano, gpt-5.3-codex, gpt-5.3-codex-fast, gpt-5.3-codex-spark-preview, gpt-5.2, gpt-5.2-codex, gpt-5.2-codex-fast, gpt-5.1, gpt-5.1-codex-max, gpt-5.1-codex-mini, grok, grok-4.3, grok-4.5, grok-4.5-fast, kimi-k2.5, gemini-3.1-pro, gemini-3-flash, gemini-3.5-flash, opus-4.5, sonnet-4.5, composer-1.5, composer-1, composer-2, composer-2-fast, composer-2.5, composer-2.5-fast"
+        description = "auto, opus-4.7, opus-4.7-fast, opus-4.7-thinking, opus-4.7-thinking-fast, opus-4.6, sonnet-4.6, gpt-5.5, gpt-5.5-fast, gpt-5.4, gpt-5.4-fast, gpt-5.4-mini, gpt-5.4-nano, gpt-5.3-codex, gpt-5.3-codex-fast, gpt-5.3-codex-spark-preview, gpt-5.2, gpt-5.2-codex, gpt-5.2-codex-fast, gpt-5.1, gpt-5.1-codex-max, gpt-5.1-codex-mini, grok, grok-4.3, grok-4.5, grok-4.5-fast, grok-4.6, grok-4.6-fast, kimi-k2.5, gemini-3.1-pro, gemini-3-flash, gemini-3.5-flash, opus-4.5, sonnet-4.5, composer-1.5, composer-1, composer-2, composer-2-fast, composer-2.5, composer-2.5-fast"
     )]
     pub model: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -148,6 +148,16 @@ fn resolve_cursor_model_name<'a>(base_model: &'a str, reasoning: Option<&'a str>
         ("grok-4.5-fast", Some("high")) => "grok-4.5-fast-high",
         ("grok-4.5-fast", Some("xhigh") | None) => "grok-4.5-fast-xhigh",
 
+        ("grok-4.6", Some("low")) => "cursor-grok-4.6-low",
+        ("grok-4.6", Some("medium")) => "cursor-grok-4.6-medium",
+        ("grok-4.6", Some("high") | None) => "cursor-grok-4.6-high",
+        ("grok-4.6", Some("xhigh")) => "cursor-grok-4.6-xhigh",
+
+        ("grok-4.6-fast", Some("low")) => "cursor-grok-4.6-low-fast",
+        ("grok-4.6-fast", Some("medium")) => "cursor-grok-4.6-medium-fast",
+        ("grok-4.6-fast", Some("high") | None) => "cursor-grok-4.6-high-fast",
+        ("grok-4.6-fast", Some("xhigh")) => "cursor-grok-4.6-xhigh-fast",
+
         ("opus-4.7", Some("low")) => "claude-opus-4-7-low",
         ("opus-4.7", Some("medium")) => "claude-opus-4-7-medium",
         ("opus-4.7", Some("high") | None) => "claude-opus-4-7-high",
@@ -223,6 +233,9 @@ fn cursor_reasoning_options(base_model: &str) -> Vec<ReasoningOption> {
         }
         "grok-4.5" | "grok-4.5-fast" => {
             ReasoningOption::from_names(["medium", "high", "xhigh"].map(String::from))
+        }
+        "grok-4.6" | "grok-4.6-fast" => {
+            ReasoningOption::from_names(["low", "medium", "high", "xhigh"].map(String::from))
         }
         // Cursor's "thinking" toggle and reasoning effort are orthogonal:
         // non-thinking variants still expose the full low/medium/high/xhigh/max
@@ -932,6 +945,8 @@ impl StandardCodingAgentExecutor for CursorAgent {
             ("gpt-5.1-codex-max", "GPT-5.1 Codex Max"),
             ("gpt-5.1", "GPT-5.1"),
             ("gpt-5.1-codex-mini", "GPT-5.1 Codex Mini"),
+            ("grok-4.6", "Grok 4.6"),
+            ("grok-4.6-fast", "Grok 4.6 Fast"),
             ("grok-4.5", "Grok 4.5"),
             ("grok-4.5-fast", "Grok 4.5 Fast"),
             ("grok-4.3", "Grok 4.3"),
@@ -1694,6 +1709,33 @@ mod tests {
                 .map(|option| option.id)
                 .collect::<Vec<_>>(),
             vec!["medium", "high", "xhigh"]
+        );
+    }
+
+    #[test]
+    fn grok_4_6_selector_resolves_to_cursor_cli_model_ids() {
+        assert_eq!(
+            resolve_cursor_model_name("grok-4.6", Some("low")),
+            "cursor-grok-4.6-low"
+        );
+        assert_eq!(
+            resolve_cursor_model_name("grok-4.6", Some("medium")),
+            "cursor-grok-4.6-medium"
+        );
+        assert_eq!(
+            resolve_cursor_model_name("grok-4.6", None),
+            "cursor-grok-4.6-high"
+        );
+        assert_eq!(
+            resolve_cursor_model_name("grok-4.6-fast", Some("xhigh")),
+            "cursor-grok-4.6-xhigh-fast"
+        );
+        assert_eq!(
+            cursor_reasoning_options("grok-4.6-fast")
+                .into_iter()
+                .map(|option| option.id)
+                .collect::<Vec<_>>(),
+            vec!["low", "medium", "high", "xhigh"]
         );
     }
 

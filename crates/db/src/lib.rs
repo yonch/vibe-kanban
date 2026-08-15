@@ -5,7 +5,10 @@ use sqlx::{
     migrate::MigrateError,
     sqlite::{SqliteConnectOptions, SqliteConnection, SqliteJournalMode, SqlitePoolOptions},
 };
-use tokio::sync::broadcast;
+use tokio::{
+    sync::broadcast,
+    time::{Duration, sleep},
+};
 use utils::assets::asset_dir;
 use uuid::Uuid;
 
@@ -140,7 +143,25 @@ impl DBService {
         status: ExecutionProcessStatus,
         exit_code: Option<i64>,
     ) -> Result<(), Error> {
-        ExecutionProcess::update_completion(&self.pool, id, status, exit_code).await?;
+        const MAX_BUSY_ATTEMPTS: usize = 4;
+        let mut attempt = 0;
+        loop {
+            match ExecutionProcess::update_completion(&self.pool, id, status.clone(), exit_code)
+                .await
+            {
+                Ok(()) => break,
+                Err(error) if is_sqlite_busy(&error) && attempt + 1 < MAX_BUSY_ATTEMPTS => {
+                    attempt += 1;
+                    tracing::warn!(
+                        execution_id = %id,
+                        attempt,
+                        "SQLite busy while finalizing execution; retrying"
+                    );
+                    sleep(Duration::from_millis(25 * attempt as u64)).await;
+                }
+                Err(error) => return Err(error),
+            }
+        }
         let _ = self.execution_completions.send(id);
         Ok(())
     }
@@ -183,8 +204,14 @@ impl DBService {
     }
 }
 
+fn is_sqlite_busy(error: &Error) -> bool {
+    matches!(error, Error::Database(database_error) if database_error.code().as_deref() == Some("5"))
+}
+
 #[cfg(test)]
 mod tests {
+    use std::time::Duration;
+
     use sqlx::sqlite::SqlitePoolOptions;
 
     use super::*;
@@ -248,5 +275,62 @@ mod tests {
             completions.try_recv(),
             Err(broadcast::error::TryRecvError::Empty)
         ));
+    }
+
+    #[tokio::test]
+    async fn completion_retries_a_transient_sqlite_busy_lock() {
+        let path = std::env::temp_dir().join(format!("vk-db-busy-{}.sqlite", Uuid::new_v4()));
+        let options = SqliteConnectOptions::new()
+            .filename(&path)
+            .create_if_missing(true)
+            .busy_timeout(Duration::ZERO);
+        let pool = SqlitePoolOptions::new()
+            .max_connections(2)
+            .connect_with(options)
+            .await
+            .unwrap();
+        sqlx::query(
+            "CREATE TABLE execution_processes (
+                id TEXT PRIMARY KEY,
+                status TEXT NOT NULL,
+                exit_code INTEGER,
+                completed_at TEXT
+            )",
+        )
+        .execute(&pool)
+        .await
+        .unwrap();
+        let execution_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO execution_processes (id, status) VALUES (?, 'running')")
+            .bind(execution_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+
+        let mut lock = pool.acquire().await.unwrap();
+        sqlx::query("BEGIN EXCLUSIVE")
+            .execute(&mut *lock)
+            .await
+            .unwrap();
+        let db = DBService::from_pool(pool.clone());
+        let update = tokio::spawn(async move {
+            db.update_execution_completion(execution_id, ExecutionProcessStatus::Completed, Some(0))
+                .await
+        });
+        tokio::time::sleep(Duration::from_millis(35)).await;
+        sqlx::query("ROLLBACK").execute(&mut *lock).await.unwrap();
+
+        update.await.unwrap().unwrap();
+        let status: String =
+            sqlx::query_scalar("SELECT status FROM execution_processes WHERE id = ?")
+                .bind(execution_id)
+                .fetch_one(&pool)
+                .await
+                .unwrap();
+        assert_eq!(status, "completed");
+
+        drop(lock);
+        pool.close().await;
+        std::fs::remove_file(&path).unwrap();
     }
 }

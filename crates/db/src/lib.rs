@@ -78,6 +78,8 @@ async fn run_migrations(pool: &Pool<Sqlite>) -> Result<(), Error> {
 pub struct DBService {
     pub pool: Pool<Sqlite>,
     execution_completions: broadcast::Sender<Uuid>,
+    #[cfg(test)]
+    busy_retries: broadcast::Sender<Uuid>,
 }
 
 impl DBService {
@@ -125,9 +127,13 @@ impl DBService {
 
     pub fn from_pool(pool: Pool<Sqlite>) -> Self {
         let (execution_completions, _) = broadcast::channel(1024);
+        #[cfg(test)]
+        let (busy_retries, _) = broadcast::channel(1024);
         Self {
             pool,
             execution_completions,
+            #[cfg(test)]
+            busy_retries,
         }
     }
 
@@ -135,6 +141,11 @@ impl DBService {
     /// only after the database update has completed successfully.
     pub fn subscribe_execution_completions(&self) -> broadcast::Receiver<Uuid> {
         self.execution_completions.subscribe()
+    }
+
+    #[cfg(test)]
+    fn subscribe_busy_retries(&self) -> broadcast::Receiver<Uuid> {
+        self.busy_retries.subscribe()
     }
 
     pub async fn update_execution_completion(
@@ -152,6 +163,8 @@ impl DBService {
                 Ok(()) => break,
                 Err(error) if is_sqlite_busy(&error) && attempt + 1 < MAX_BUSY_ATTEMPTS => {
                     attempt += 1;
+                    #[cfg(test)]
+                    let _ = self.busy_retries.send(id);
                     tracing::warn!(
                         execution_id = %id,
                         attempt,
@@ -313,14 +326,23 @@ mod tests {
             .await
             .unwrap();
         let db = DBService::from_pool(pool.clone());
+        let mut busy_retries = db.subscribe_busy_retries();
+        let mut completions = db.subscribe_execution_completions();
         let update = tokio::spawn(async move {
             db.update_execution_completion(execution_id, ExecutionProcessStatus::Completed, Some(0))
                 .await
         });
-        tokio::time::sleep(Duration::from_millis(35)).await;
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(1), busy_retries.recv())
+                .await
+                .expect("completion update did not encounter SQLITE_BUSY")
+                .unwrap(),
+            execution_id
+        );
         sqlx::query("ROLLBACK").execute(&mut *lock).await.unwrap();
 
         update.await.unwrap().unwrap();
+        assert_eq!(completions.recv().await.unwrap(), execution_id);
         let status: String =
             sqlx::query_scalar("SELECT status FROM execution_processes WHERE id = ?")
                 .bind(execution_id)

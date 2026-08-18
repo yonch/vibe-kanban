@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     io,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Weak},
     time::{Duration, Instant},
 };
 
@@ -43,7 +43,7 @@ use services::services::{
     analytics::AnalyticsContext,
     approvals::{Approvals, executor_approvals::ExecutorApprovalBridge},
     config::{Config, DEFAULT_COMMIT_REMINDER_PROMPT},
-    container::{ContainerError, ContainerRef, ContainerService},
+    container::{ContainerError, ContainerRef, ContainerService, ExecutionStartOutcome},
     diff_stream::{self, DiffStreamHandle},
     file::FileService,
     notification::NotificationService,
@@ -51,7 +51,10 @@ use services::services::{
     remote_client::RemoteClient,
     remote_sync,
 };
-use tokio::{sync::RwLock, task::JoinHandle};
+use tokio::{
+    sync::{Mutex, RwLock},
+    task::JoinHandle,
+};
 use tokio_util::io::ReaderStream;
 use utils::{
     log_msg::LogMsg,
@@ -70,6 +73,7 @@ pub struct LocalContainerService {
     db: DBService,
     workspace_manager: WorkspaceManager,
     child_store: Arc<RwLock<HashMap<Uuid, Arc<RwLock<AsyncGroupChild>>>>>,
+    execution_locks: Arc<RwLock<HashMap<Uuid, Weak<Mutex<()>>>>>,
     cancellation_tokens: Arc<RwLock<HashMap<Uuid, CancellationToken>>>,
     msg_stores: Arc<RwLock<HashMap<Uuid, Arc<MsgStore>>>>,
     /// Tracks background tasks that stream logs to the database.
@@ -102,6 +106,7 @@ impl LocalContainerService {
         remote_client: Option<RemoteClient>,
     ) -> Self {
         let child_store = Arc::new(RwLock::new(HashMap::new()));
+        let execution_locks = Arc::new(RwLock::new(HashMap::new()));
         let cancellation_tokens = Arc::new(RwLock::new(HashMap::new()));
         let db_stream_handles = Arc::new(RwLock::new(HashMap::new()));
         let exit_monitor_handles = Arc::new(RwLock::new(HashMap::new()));
@@ -112,6 +117,7 @@ impl LocalContainerService {
             db,
             workspace_manager,
             child_store,
+            execution_locks,
             cancellation_tokens,
             msg_stores,
             db_stream_handles,
@@ -196,6 +202,19 @@ impl LocalContainerService {
     async fn get_child_from_store(&self, id: &Uuid) -> Option<Arc<RwLock<AsyncGroupChild>>> {
         let map = self.child_store.read().await;
         map.get(id).cloned()
+    }
+
+    async fn execution_lock(&self, id: Uuid) -> Arc<Mutex<()>> {
+        let mut locks = self.execution_locks.write().await;
+        locks.retain(|_, lock| lock.strong_count() > 0);
+
+        if let Some(lock) = locks.get(&id).and_then(Weak::upgrade) {
+            return lock;
+        }
+
+        let lock = Arc::new(Mutex::new(()));
+        locks.insert(id, Arc::downgrade(&lock));
+        lock
     }
 
     async fn add_child_to_store(&self, id: Uuid, exec: AsyncGroupChild) {
@@ -481,6 +500,7 @@ impl LocalContainerService {
         &self,
         exec_id: &Uuid,
         exit_signal: Option<ExecutorExitSignal>,
+        immediate_terminal: bool,
     ) -> JoinHandle<()> {
         let exec_id = *exec_id;
         let child_store = self.child_store.clone();
@@ -490,41 +510,40 @@ impl LocalContainerService {
         let container = self.clone();
         let analytics = self.analytics.clone();
 
-        let mut process_exit_rx = self.spawn_os_exit_watcher(exec_id);
-
         tokio::spawn(async move {
-            let mut exit_signal_future = exit_signal
-                .map(|rx| rx.boxed()) // wait for result
-                .unwrap_or_else(|| std::future::pending().boxed()); // no signal, stall forever
+            let status_result = if immediate_terminal {
+                Err(std::io::Error::other(
+                    "execution reached a terminal state before spawn",
+                ))
+            } else {
+                let mut process_exit_rx = container.spawn_os_exit_watcher(exec_id);
+                let mut exit_signal_future = exit_signal
+                    .map(|rx| rx.boxed()) // wait for result
+                    .unwrap_or_else(|| std::future::pending().boxed()); // no signal, stall forever
 
-            let status_result: std::io::Result<std::process::ExitStatus>;
-
-            // Wait for process to exit, or exit signal from executor
-            tokio::select! {
-                // Exit signal with result.
-                // Some coding agent processes do not automatically exit after processing the user request; instead the executor
-                // signals when processing has finished to gracefully kill the process.
-                exit_result = &mut exit_signal_future => {
-                    // Executor signaled completion: kill group and use the provided result
-                    if let Some(child_lock) = child_store.read().await.get(&exec_id).cloned() {
-                        let mut child = child_lock.write().await ;
-                        if let Err(err) = command::kill_process_group(&mut child).await {
-                            tracing::error!("Failed to kill process group after exit signal: {} {}", exec_id, err);
+                // Wait for process to exit, or exit signal from executor
+                tokio::select! {
+                    // Exit signal with result.
+                    // Some coding agent processes do not automatically exit after processing the user request; instead the executor
+                    // signals when processing has finished to gracefully kill the process.
+                    exit_result = &mut exit_signal_future => {
+                        // Executor signaled completion: kill group and use the provided result
+                        if let Some(child_lock) = child_store.read().await.get(&exec_id).cloned() {
+                            let mut child = child_lock.write().await ;
+                            if let Err(err) = command::kill_process_group(&mut child).await {
+                                tracing::error!("Failed to kill process group after exit signal: {} {}", exec_id, err);
+                            }
                         }
-                    }
 
-                    // Map the exit result to appropriate exit status
-                    status_result = match exit_result {
-                        Ok(ExecutorExitResult::Success) => Ok(success_exit_status()),
-                        Ok(ExecutorExitResult::Failure) => Ok(failure_exit_status()),
-                        Err(_) => Ok(success_exit_status()), // Channel closed, assume success
-                    };
+                        // Map the exit result to appropriate exit status
+                        Ok(exit_result_status(exit_result))
+                    }
+                    // Process exit
+                    exit_status_result = &mut process_exit_rx => {
+                        exit_status_result.unwrap_or_else(|e| Err(std::io::Error::other(e)))
+                    }
                 }
-                // Process exit
-                exit_status_result = &mut process_exit_rx => {
-                    status_result = exit_status_result.unwrap_or_else(|e| Err(std::io::Error::other(e)));
-                }
-            }
+            };
 
             let (exit_code, status) = match status_result {
                 Ok(exit_status) => {
@@ -804,12 +823,19 @@ impl LocalContainerService {
                 let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
             }
 
-            // SIGKILL any orphaned children (e.g. MCP servers) still in the
-            // process group. The executor itself is already done — either it
-            // exited naturally or was killed in the exit-signal branch above.
+            // Kill any orphaned children (e.g. MCP servers) still in the process
+            // group. `start_kill` only targets the group leader and is ineffective
+            // once that leader has already exited; `kill_process_group` retains the
+            // original pgid and escalates through SIGINT/SIGTERM/SIGKILL.
             if let Some(child_lock) = child_store.read().await.get(&exec_id).cloned() {
                 let mut child = child_lock.write().await;
-                let _ = child.start_kill();
+                if let Err(err) = command::kill_process_group(&mut child).await {
+                    tracing::warn!(
+                        "Failed to clean up process group for execution {}: {}",
+                        exec_id,
+                        err
+                    );
+                }
             }
             child_store.write().await.remove(&exec_id);
         })
@@ -1321,7 +1347,36 @@ impl ContainerService for LocalContainerService {
         workspace: &Workspace,
         execution_process: &ExecutionProcess,
         executor_action: &ExecutorAction,
-    ) -> Result<(), ContainerError> {
+    ) -> Result<ExecutionStartOutcome, ContainerError> {
+        // A stop can arrive after the execution row is created but before the
+        // child is registered. Serialize those transitions per execution so a
+        // successful stop cannot leave a concurrently spawned process alive.
+        let execution_lock = self.execution_lock(execution_process.id).await;
+        let _execution_guard = execution_lock.lock().await;
+        let current_execution_process =
+            ExecutionProcess::find_by_id(&self.db.pool, execution_process.id)
+                .await?
+                .ok_or_else(|| ContainerError::Other(anyhow!("Execution process not found")))?;
+        if !should_start_execution(&current_execution_process.status) {
+            tracing::info!(
+                "Skipping startup for execution {} because it was stopped before spawn",
+                execution_process.id
+            );
+            if let Err(error) = self
+                .spawn_exit_monitor(&execution_process.id, None, true)
+                .await
+            {
+                tracing::error!(
+                    "Terminal cleanup task failed for skipped execution {}: {}",
+                    execution_process.id,
+                    error
+                );
+            }
+            return Ok(ExecutionStartOutcome::Skipped(Box::new(
+                current_execution_process,
+            )));
+        }
+
         // Get the worktree path
         let container_ref = workspace
             .container_ref
@@ -1399,8 +1454,36 @@ impl ContainerService for LocalContainerService {
         }
 
         // Spawn unified exit monitor: watches OS exit and optional executor signal
-        let hn = self.spawn_exit_monitor(&execution_process.id, spawned.exit_signal);
+        let hn = self.spawn_exit_monitor(&execution_process.id, spawned.exit_signal, false);
         self.add_exit_monitor_handle(execution_process.id, hn).await;
+
+        Ok(ExecutionStartOutcome::Started)
+    }
+
+    async fn finalize_failed_start(
+        &self,
+        execution_process_id: Uuid,
+    ) -> Result<(), ContainerError> {
+        let execution_lock = self.execution_lock(execution_process_id).await;
+        let _execution_guard = execution_lock.lock().await;
+
+        self.msg_stores.write().await.remove(&execution_process_id);
+
+        let current_execution_process =
+            ExecutionProcess::find_by_id(&self.db.pool, execution_process_id).await?;
+        if should_finalize_failed_start(
+            current_execution_process
+                .as_ref()
+                .map(|process| &process.status),
+        ) {
+            self.db
+                .update_execution_completion(
+                    execution_process_id,
+                    ExecutionProcessStatus::Failed,
+                    None,
+                )
+                .await?;
+        }
 
         Ok(())
     }
@@ -1410,21 +1493,33 @@ impl ContainerService for LocalContainerService {
         execution_process: &ExecutionProcess,
         status: ExecutionProcessStatus,
     ) -> Result<(), ContainerError> {
-        let child = self
-            .get_child_from_store(&execution_process.id)
-            .await
-            .ok_or_else(|| {
-                ContainerError::Other(anyhow!("Child process not found for execution"))
-            })?;
+        // If startup is currently spawning, wait for it to register the child;
+        // if stop won the race, startup will observe the terminal DB state and
+        // skip spawning altogether.
+        let execution_lock = self.execution_lock(execution_process.id).await;
+        let _execution_guard = execution_lock.lock().await;
+        let child = self.get_child_from_store(&execution_process.id).await;
         let exit_code = if status == ExecutionProcessStatus::Completed {
             Some(0)
         } else {
             None
         };
 
-        self.db
-            .update_execution_completion(execution_process.id, status, exit_code)
-            .await?;
+        let current_status = if child.is_none() {
+            ExecutionProcess::find_by_id(&self.db.pool, execution_process.id)
+                .await?
+                .map(|process| process.status)
+        } else {
+            None
+        };
+        let should_update_completion =
+            should_update_completion(child.is_some(), current_status.as_ref());
+
+        if should_update_completion {
+            self.db
+                .update_execution_completion(execution_process.id, status, exit_code)
+                .await?;
+        }
 
         // Try graceful cancellation first, then force kill
         if let Some(cancel) = self.take_cancellation_token(&execution_process.id).await {
@@ -1447,7 +1542,7 @@ impl ContainerService for LocalContainerService {
             }
         }
 
-        {
+        if let Some(child) = child {
             let mut child_guard = child.write().await;
             if let Err(e) = command::kill_process_group(&mut child_guard).await {
                 tracing::error!(
@@ -1457,6 +1552,15 @@ impl ContainerService for LocalContainerService {
                 );
                 return Err(e);
             }
+        } else {
+            // The exit watcher normally owns this transition, but the child can
+            // disappear first if the harness crashes or the service races with
+            // cleanup. Reconcile a row that is still running, but preserve any
+            // terminal state already written by the exit watcher.
+            tracing::warn!(
+                "Child handle missing while stopping execution {}; reconciling state",
+                execution_process.id
+            );
         }
         self.remove_child_from_store(&execution_process.id).await;
 
@@ -1646,5 +1750,90 @@ fn success_exit_status() -> std::process::ExitStatus {
     {
         use std::os::windows::process::ExitStatusExt;
         ExitStatusExt::from_raw(0)
+    }
+}
+
+fn exit_result_status(
+    result: Result<ExecutorExitResult, tokio::sync::oneshot::error::RecvError>,
+) -> std::process::ExitStatus {
+    match result {
+        Ok(ExecutorExitResult::Success) => success_exit_status(),
+        Ok(ExecutorExitResult::Failure) | Err(_) => failure_exit_status(),
+    }
+}
+
+fn should_update_completion(
+    has_child: bool,
+    current_status: Option<&ExecutionProcessStatus>,
+) -> bool {
+    has_child || matches!(current_status, Some(ExecutionProcessStatus::Running))
+}
+
+fn should_start_execution(current_status: &ExecutionProcessStatus) -> bool {
+    matches!(current_status, ExecutionProcessStatus::Running)
+}
+
+fn should_finalize_failed_start(current_status: Option<&ExecutionProcessStatus>) -> bool {
+    matches!(current_status, Some(ExecutionProcessStatus::Running))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn dropped_exit_signal_is_failure() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        drop(sender);
+
+        let status = exit_result_status(receiver.await);
+
+        assert!(!status.success());
+    }
+
+    #[test]
+    fn missing_child_updates_running_execution() {
+        assert!(should_update_completion(
+            false,
+            Some(&ExecutionProcessStatus::Running)
+        ));
+    }
+
+    #[test]
+    fn missing_child_preserves_terminal_execution() {
+        for status in [
+            ExecutionProcessStatus::Completed,
+            ExecutionProcessStatus::Failed,
+            ExecutionProcessStatus::Killed,
+        ] {
+            assert!(!should_update_completion(false, Some(&status)));
+        }
+    }
+
+    #[test]
+    fn startup_only_proceeds_while_execution_is_running() {
+        assert!(should_start_execution(&ExecutionProcessStatus::Running));
+        for status in [
+            ExecutionProcessStatus::Completed,
+            ExecutionProcessStatus::Failed,
+            ExecutionProcessStatus::Killed,
+        ] {
+            assert!(!should_start_execution(&status));
+        }
+    }
+
+    #[test]
+    fn failed_start_only_updates_running_execution() {
+        assert!(should_finalize_failed_start(Some(
+            &ExecutionProcessStatus::Running
+        )));
+        for status in [
+            ExecutionProcessStatus::Completed,
+            ExecutionProcessStatus::Failed,
+            ExecutionProcessStatus::Killed,
+        ] {
+            assert!(!should_finalize_failed_start(Some(&status)));
+        }
+        assert!(!should_finalize_failed_start(None));
     }
 }

@@ -514,14 +514,7 @@ impl LocalContainerService {
                     }
 
                     // Map the exit result to appropriate exit status
-                    status_result = match exit_result {
-                        Ok(ExecutorExitResult::Success) => Ok(success_exit_status()),
-                        Ok(ExecutorExitResult::Failure) => Ok(failure_exit_status()),
-                        // A dropped sender means the executor-side harness died before it
-                        // could report a result. Treat that as a failure; reporting success
-                        // here can finalize a task while descendants are still running.
-                        Err(_) => Ok(failure_exit_status()),
-                    };
+                    status_result = Ok(exit_result_status(exit_result));
                 }
                 // Process exit
                 exit_status_result = &mut process_exit_rx => {
@@ -1427,13 +1420,15 @@ impl ContainerService for LocalContainerService {
             None
         };
 
-        let should_update_completion = if child.is_some() {
-            true
-        } else {
+        let current_status = if child.is_none() {
             ExecutionProcess::find_by_id(&self.db.pool, execution_process.id)
                 .await?
-                .is_some_and(|process| process.status == ExecutionProcessStatus::Running)
+                .map(|process| process.status)
+        } else {
+            None
         };
+        let should_update_completion =
+            should_update_completion(child.is_some(), current_status.as_ref());
 
         if should_update_completion {
             self.db
@@ -1670,5 +1665,55 @@ fn success_exit_status() -> std::process::ExitStatus {
     {
         use std::os::windows::process::ExitStatusExt;
         ExitStatusExt::from_raw(0)
+    }
+}
+
+fn exit_result_status(
+    result: Result<ExecutorExitResult, tokio::sync::oneshot::error::RecvError>,
+) -> std::process::ExitStatus {
+    match result {
+        Ok(ExecutorExitResult::Success) => success_exit_status(),
+        Ok(ExecutorExitResult::Failure) | Err(_) => failure_exit_status(),
+    }
+}
+
+fn should_update_completion(
+    has_child: bool,
+    current_status: Option<&ExecutionProcessStatus>,
+) -> bool {
+    has_child || matches!(current_status, Some(ExecutionProcessStatus::Running))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn dropped_exit_signal_is_failure() {
+        let (sender, receiver) = tokio::sync::oneshot::channel();
+        drop(sender);
+
+        let status = exit_result_status(receiver.await);
+
+        assert!(!status.success());
+    }
+
+    #[test]
+    fn missing_child_updates_running_execution() {
+        assert!(should_update_completion(
+            false,
+            Some(&ExecutionProcessStatus::Running)
+        ));
+    }
+
+    #[test]
+    fn missing_child_preserves_terminal_execution() {
+        for status in [
+            ExecutionProcessStatus::Completed,
+            ExecutionProcessStatus::Failed,
+            ExecutionProcessStatus::Killed,
+        ] {
+            assert!(!should_update_completion(false, Some(&status)));
+        }
     }
 }

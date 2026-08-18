@@ -2,7 +2,7 @@ use std::{
     collections::HashMap,
     io,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Weak},
     time::{Duration, Instant},
 };
 
@@ -51,7 +51,10 @@ use services::services::{
     remote_client::RemoteClient,
     remote_sync,
 };
-use tokio::{sync::RwLock, task::JoinHandle};
+use tokio::{
+    sync::{Mutex, RwLock},
+    task::JoinHandle,
+};
 use tokio_util::io::ReaderStream;
 use utils::{
     log_msg::LogMsg,
@@ -70,6 +73,7 @@ pub struct LocalContainerService {
     db: DBService,
     workspace_manager: WorkspaceManager,
     child_store: Arc<RwLock<HashMap<Uuid, Arc<RwLock<AsyncGroupChild>>>>>,
+    execution_locks: Arc<RwLock<HashMap<Uuid, Weak<Mutex<()>>>>>,
     cancellation_tokens: Arc<RwLock<HashMap<Uuid, CancellationToken>>>,
     msg_stores: Arc<RwLock<HashMap<Uuid, Arc<MsgStore>>>>,
     /// Tracks background tasks that stream logs to the database.
@@ -102,6 +106,7 @@ impl LocalContainerService {
         remote_client: Option<RemoteClient>,
     ) -> Self {
         let child_store = Arc::new(RwLock::new(HashMap::new()));
+        let execution_locks = Arc::new(RwLock::new(HashMap::new()));
         let cancellation_tokens = Arc::new(RwLock::new(HashMap::new()));
         let db_stream_handles = Arc::new(RwLock::new(HashMap::new()));
         let exit_monitor_handles = Arc::new(RwLock::new(HashMap::new()));
@@ -112,6 +117,7 @@ impl LocalContainerService {
             db,
             workspace_manager,
             child_store,
+            execution_locks,
             cancellation_tokens,
             msg_stores,
             db_stream_handles,
@@ -196,6 +202,19 @@ impl LocalContainerService {
     async fn get_child_from_store(&self, id: &Uuid) -> Option<Arc<RwLock<AsyncGroupChild>>> {
         let map = self.child_store.read().await;
         map.get(id).cloned()
+    }
+
+    async fn execution_lock(&self, id: Uuid) -> Arc<Mutex<()>> {
+        let mut locks = self.execution_locks.write().await;
+        locks.retain(|_, lock| lock.strong_count() > 0);
+
+        if let Some(lock) = locks.get(&id).and_then(Weak::upgrade) {
+            return lock;
+        }
+
+        let lock = Arc::new(Mutex::new(()));
+        locks.insert(id, Arc::downgrade(&lock));
+        lock
     }
 
     async fn add_child_to_store(&self, id: Uuid, exec: AsyncGroupChild) {
@@ -1325,6 +1344,22 @@ impl ContainerService for LocalContainerService {
         execution_process: &ExecutionProcess,
         executor_action: &ExecutorAction,
     ) -> Result<(), ContainerError> {
+        // A stop can arrive after the execution row is created but before the
+        // child is registered. Serialize those transitions per execution so a
+        // successful stop cannot leave a concurrently spawned process alive.
+        let execution_lock = self.execution_lock(execution_process.id).await;
+        let _execution_guard = execution_lock.lock().await;
+        let current_status = ExecutionProcess::find_by_id(&self.db.pool, execution_process.id)
+            .await?
+            .map(|process| process.status);
+        if !should_start_execution(current_status.as_ref()) {
+            tracing::info!(
+                "Skipping startup for execution {} because it was stopped before spawn",
+                execution_process.id
+            );
+            return Ok(());
+        }
+
         // Get the worktree path
         let container_ref = workspace
             .container_ref
@@ -1413,6 +1448,11 @@ impl ContainerService for LocalContainerService {
         execution_process: &ExecutionProcess,
         status: ExecutionProcessStatus,
     ) -> Result<(), ContainerError> {
+        // If startup is currently spawning, wait for it to register the child;
+        // if stop won the race, startup will observe the terminal DB state and
+        // skip spawning altogether.
+        let execution_lock = self.execution_lock(execution_process.id).await;
+        let _execution_guard = execution_lock.lock().await;
         let child = self.get_child_from_store(&execution_process.id).await;
         let exit_code = if status == ExecutionProcessStatus::Completed {
             Some(0)
@@ -1684,6 +1724,10 @@ fn should_update_completion(
     has_child || matches!(current_status, Some(ExecutionProcessStatus::Running))
 }
 
+fn should_start_execution(current_status: Option<&ExecutionProcessStatus>) -> bool {
+    matches!(current_status, Some(ExecutionProcessStatus::Running))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1715,5 +1759,20 @@ mod tests {
         ] {
             assert!(!should_update_completion(false, Some(&status)));
         }
+    }
+
+    #[test]
+    fn startup_only_proceeds_while_execution_is_running() {
+        assert!(should_start_execution(Some(
+            &ExecutionProcessStatus::Running
+        )));
+        for status in [
+            ExecutionProcessStatus::Completed,
+            ExecutionProcessStatus::Failed,
+            ExecutionProcessStatus::Killed,
+        ] {
+            assert!(!should_start_execution(Some(&status)));
+        }
+        assert!(!should_start_execution(None));
     }
 }

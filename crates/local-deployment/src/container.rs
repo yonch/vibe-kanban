@@ -1427,9 +1427,19 @@ impl ContainerService for LocalContainerService {
             None
         };
 
-        self.db
-            .update_execution_completion(execution_process.id, status, exit_code)
-            .await?;
+        let should_update_completion = if child.is_some() {
+            true
+        } else {
+            ExecutionProcess::find_by_id(&self.db.pool, execution_process.id)
+                .await?
+                .is_some_and(|process| process.status == ExecutionProcessStatus::Running)
+        };
+
+        if should_update_completion {
+            self.db
+                .update_execution_completion(execution_process.id, status, exit_code)
+                .await?;
+        }
 
         // Try graceful cancellation first, then force kill
         if let Some(cancel) = self.take_cancellation_token(&execution_process.id).await {
@@ -1465,8 +1475,8 @@ impl ContainerService for LocalContainerService {
         } else {
             // The exit watcher normally owns this transition, but the child can
             // disappear first if the harness crashes or the service races with
-            // cleanup. The requested terminal DB state was written above, so make
-            // stop idempotent and finish clearing any stale bookkeeping.
+            // cleanup. Reconcile a row that is still running, but preserve any
+            // terminal state already written by the exit watcher.
             tracing::warn!(
                 "Child handle missing while stopping execution {}; reconciling state",
                 execution_process.id

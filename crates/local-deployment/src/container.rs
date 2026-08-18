@@ -43,7 +43,7 @@ use services::services::{
     analytics::AnalyticsContext,
     approvals::{Approvals, executor_approvals::ExecutorApprovalBridge},
     config::{Config, DEFAULT_COMMIT_REMINDER_PROMPT},
-    container::{ContainerError, ContainerRef, ContainerService},
+    container::{ContainerError, ContainerRef, ContainerService, ExecutionStartOutcome},
     diff_stream::{self, DiffStreamHandle},
     file::FileService,
     notification::NotificationService,
@@ -1343,21 +1343,24 @@ impl ContainerService for LocalContainerService {
         workspace: &Workspace,
         execution_process: &ExecutionProcess,
         executor_action: &ExecutorAction,
-    ) -> Result<(), ContainerError> {
+    ) -> Result<ExecutionStartOutcome, ContainerError> {
         // A stop can arrive after the execution row is created but before the
         // child is registered. Serialize those transitions per execution so a
         // successful stop cannot leave a concurrently spawned process alive.
         let execution_lock = self.execution_lock(execution_process.id).await;
         let _execution_guard = execution_lock.lock().await;
-        let current_status = ExecutionProcess::find_by_id(&self.db.pool, execution_process.id)
-            .await?
-            .map(|process| process.status);
-        if !should_start_execution(current_status.as_ref()) {
+        let current_execution_process =
+            ExecutionProcess::find_by_id(&self.db.pool, execution_process.id)
+                .await?
+                .ok_or_else(|| ContainerError::Other(anyhow!("Execution process not found")))?;
+        if !should_start_execution(&current_execution_process.status) {
             tracing::info!(
                 "Skipping startup for execution {} because it was stopped before spawn",
                 execution_process.id
             );
-            return Ok(());
+            return Ok(ExecutionStartOutcome::Skipped(Box::new(
+                current_execution_process,
+            )));
         }
 
         // Get the worktree path
@@ -1440,7 +1443,7 @@ impl ContainerService for LocalContainerService {
         let hn = self.spawn_exit_monitor(&execution_process.id, spawned.exit_signal);
         self.add_exit_monitor_handle(execution_process.id, hn).await;
 
-        Ok(())
+        Ok(ExecutionStartOutcome::Started)
     }
 
     async fn stop_execution(
@@ -1724,8 +1727,8 @@ fn should_update_completion(
     has_child || matches!(current_status, Some(ExecutionProcessStatus::Running))
 }
 
-fn should_start_execution(current_status: Option<&ExecutionProcessStatus>) -> bool {
-    matches!(current_status, Some(ExecutionProcessStatus::Running))
+fn should_start_execution(current_status: &ExecutionProcessStatus) -> bool {
+    matches!(current_status, ExecutionProcessStatus::Running)
 }
 
 #[cfg(test)]
@@ -1763,16 +1766,13 @@ mod tests {
 
     #[test]
     fn startup_only_proceeds_while_execution_is_running() {
-        assert!(should_start_execution(Some(
-            &ExecutionProcessStatus::Running
-        )));
+        assert!(should_start_execution(&ExecutionProcessStatus::Running));
         for status in [
             ExecutionProcessStatus::Completed,
             ExecutionProcessStatus::Failed,
             ExecutionProcessStatus::Killed,
         ] {
-            assert!(!should_start_execution(Some(&status)));
+            assert!(!should_start_execution(&status));
         }
-        assert!(!should_start_execution(None));
     }
 }

@@ -66,6 +66,11 @@ pub enum ExecutionClaim {
     Existing(ExecutionProcess),
 }
 
+pub enum ExecutionStartOutcome {
+    Started,
+    Skipped(Box<ExecutionProcess>),
+}
+
 #[derive(Debug, Error)]
 pub enum ContainerError {
     #[error(transparent)]
@@ -759,7 +764,7 @@ pub trait ContainerService {
         workspace: &Workspace,
         execution_process: &ExecutionProcess,
         executor_action: &ExecutorAction,
-    ) -> Result<(), ContainerError>;
+    ) -> Result<ExecutionStartOutcome, ContainerError>;
 
     async fn stop_execution(
         &self,
@@ -1374,75 +1379,89 @@ pub trait ContainerService {
             }
         }
 
-        if let Err(start_error) = self
+        let start_outcome = match self
             .start_execution_inner(workspace, &execution_process, executor_action)
             .await
         {
-            self.msg_stores()
-                .write()
-                .await
-                .remove(&execution_process.id);
-            // Mark process as failed
-            if let Err(update_error) = self
-                .db()
-                .update_execution_completion(
-                    execution_process.id,
-                    ExecutionProcessStatus::Failed,
-                    None,
-                )
-                .await
-            {
-                tracing::error!(
-                    "Failed to mark execution process {} as failed after start error: {}",
-                    execution_process.id,
-                    update_error
-                );
-            }
-            // Emit stderr error message
-            let log_message = LogMsg::Stderr(format!("Failed to start execution: {start_error}"));
-            if let Err(e) = execution_process::append_log_message(
-                session.id,
-                execution_process.id,
-                &log_message,
-            )
-            .await
-            {
-                tracing::error!(
-                    "Failed to write error log for execution {}: {}",
-                    execution_process.id,
-                    e
-                );
-            }
-
-            // Emit NextAction with failure context for coding agent requests
-            if let ContainerError::ExecutorError(ExecutorError::ExecutableNotFound { program }) =
-                &start_error
-            {
-                let help_text = format!("The required executable `{program}` is not installed.");
-                let error_message = NormalizedEntry {
-                    timestamp: None,
-                    entry_type: NormalizedEntryType::ErrorMessage {
-                        error_type: NormalizedEntryError::SetupRequired,
-                    },
-                    content: help_text,
-                    metadata: None,
-                };
-                let patch = ConversationPatch::add_normalized_entry(2, error_message);
+            Ok(start_outcome) => start_outcome,
+            Err(start_error) => {
+                self.msg_stores()
+                    .write()
+                    .await
+                    .remove(&execution_process.id);
+                // Mark process as failed
+                if let Err(update_error) = self
+                    .db()
+                    .update_execution_completion(
+                        execution_process.id,
+                        ExecutionProcessStatus::Failed,
+                        None,
+                    )
+                    .await
+                {
+                    tracing::error!(
+                        "Failed to mark execution process {} as failed after start error: {}",
+                        execution_process.id,
+                        update_error
+                    );
+                }
+                // Emit stderr error message
+                let log_message =
+                    LogMsg::Stderr(format!("Failed to start execution: {start_error}"));
                 if let Err(e) = execution_process::append_log_message(
                     session.id,
                     execution_process.id,
-                    &LogMsg::JsonPatch(patch),
+                    &log_message,
                 )
                 .await
                 {
                     tracing::error!(
-                        "Failed to write setup-required log for execution {}: {}",
+                        "Failed to write error log for execution {}: {}",
                         execution_process.id,
                         e
                     );
                 }
-            };
-            return Err(start_error);
+
+                // Emit NextAction with failure context for coding agent requests
+                if let ContainerError::ExecutorError(ExecutorError::ExecutableNotFound {
+                    program,
+                }) = &start_error
+                {
+                    let help_text =
+                        format!("The required executable `{program}` is not installed.");
+                    let error_message = NormalizedEntry {
+                        timestamp: None,
+                        entry_type: NormalizedEntryType::ErrorMessage {
+                            error_type: NormalizedEntryError::SetupRequired,
+                        },
+                        content: help_text,
+                        metadata: None,
+                    };
+                    let patch = ConversationPatch::add_normalized_entry(2, error_message);
+                    if let Err(e) = execution_process::append_log_message(
+                        session.id,
+                        execution_process.id,
+                        &LogMsg::JsonPatch(patch),
+                    )
+                    .await
+                    {
+                        tracing::error!(
+                            "Failed to write setup-required log for execution {}: {}",
+                            execution_process.id,
+                            e
+                        );
+                    }
+                };
+                return Err(start_error);
+            }
+        };
+
+        if let ExecutionStartOutcome::Skipped(current_execution_process) = start_outcome {
+            self.msg_stores()
+                .write()
+                .await
+                .remove(&execution_process.id);
+            return Ok(*current_execution_process);
         }
 
         // Start processing normalised logs for executor requests and follow ups

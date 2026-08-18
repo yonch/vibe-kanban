@@ -517,7 +517,10 @@ impl LocalContainerService {
                     status_result = match exit_result {
                         Ok(ExecutorExitResult::Success) => Ok(success_exit_status()),
                         Ok(ExecutorExitResult::Failure) => Ok(failure_exit_status()),
-                        Err(_) => Ok(success_exit_status()), // Channel closed, assume success
+                        // A dropped sender means the executor-side harness died before it
+                        // could report a result. Treat that as a failure; reporting success
+                        // here can finalize a task while descendants are still running.
+                        Err(_) => Ok(failure_exit_status()),
                     };
                 }
                 // Process exit
@@ -804,12 +807,19 @@ impl LocalContainerService {
                 let _ = tokio::time::timeout(Duration::from_secs(5), handle).await;
             }
 
-            // SIGKILL any orphaned children (e.g. MCP servers) still in the
-            // process group. The executor itself is already done — either it
-            // exited naturally or was killed in the exit-signal branch above.
+            // Kill any orphaned children (e.g. MCP servers) still in the process
+            // group. `start_kill` only targets the group leader and is ineffective
+            // once that leader has already exited; `kill_process_group` retains the
+            // original pgid and escalates through SIGINT/SIGTERM/SIGKILL.
             if let Some(child_lock) = child_store.read().await.get(&exec_id).cloned() {
                 let mut child = child_lock.write().await;
-                let _ = child.start_kill();
+                if let Err(err) = command::kill_process_group(&mut child).await {
+                    tracing::warn!(
+                        "Failed to clean up process group for execution {}: {}",
+                        exec_id,
+                        err
+                    );
+                }
             }
             child_store.write().await.remove(&exec_id);
         })
@@ -1410,12 +1420,7 @@ impl ContainerService for LocalContainerService {
         execution_process: &ExecutionProcess,
         status: ExecutionProcessStatus,
     ) -> Result<(), ContainerError> {
-        let child = self
-            .get_child_from_store(&execution_process.id)
-            .await
-            .ok_or_else(|| {
-                ContainerError::Other(anyhow!("Child process not found for execution"))
-            })?;
+        let child = self.get_child_from_store(&execution_process.id).await;
         let exit_code = if status == ExecutionProcessStatus::Completed {
             Some(0)
         } else {
@@ -1447,7 +1452,7 @@ impl ContainerService for LocalContainerService {
             }
         }
 
-        {
+        if let Some(child) = child {
             let mut child_guard = child.write().await;
             if let Err(e) = command::kill_process_group(&mut child_guard).await {
                 tracing::error!(
@@ -1457,6 +1462,15 @@ impl ContainerService for LocalContainerService {
                 );
                 return Err(e);
             }
+        } else {
+            // The exit watcher normally owns this transition, but the child can
+            // disappear first if the harness crashes or the service races with
+            // cleanup. The requested terminal DB state was written above, so make
+            // stop idempotent and finish clearing any stale bookkeeping.
+            tracing::warn!(
+                "Child handle missing while stopping execution {}; reconciling state",
+                execution_process.id
+            );
         }
         self.remove_child_from_store(&execution_process.id).await;
 

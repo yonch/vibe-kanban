@@ -500,6 +500,7 @@ impl LocalContainerService {
         &self,
         exec_id: &Uuid,
         exit_signal: Option<ExecutorExitSignal>,
+        immediate_terminal: bool,
     ) -> JoinHandle<()> {
         let exec_id = *exec_id;
         let child_store = self.child_store.clone();
@@ -509,37 +510,40 @@ impl LocalContainerService {
         let container = self.clone();
         let analytics = self.analytics.clone();
 
-        let mut process_exit_rx = self.spawn_os_exit_watcher(exec_id);
-
         tokio::spawn(async move {
-            let mut exit_signal_future = exit_signal
-                .map(|rx| rx.boxed()) // wait for result
-                .unwrap_or_else(|| std::future::pending().boxed()); // no signal, stall forever
+            let status_result = if immediate_terminal {
+                Err(std::io::Error::other(
+                    "execution reached a terminal state before spawn",
+                ))
+            } else {
+                let mut process_exit_rx = container.spawn_os_exit_watcher(exec_id);
+                let mut exit_signal_future = exit_signal
+                    .map(|rx| rx.boxed()) // wait for result
+                    .unwrap_or_else(|| std::future::pending().boxed()); // no signal, stall forever
 
-            let status_result: std::io::Result<std::process::ExitStatus>;
-
-            // Wait for process to exit, or exit signal from executor
-            tokio::select! {
-                // Exit signal with result.
-                // Some coding agent processes do not automatically exit after processing the user request; instead the executor
-                // signals when processing has finished to gracefully kill the process.
-                exit_result = &mut exit_signal_future => {
-                    // Executor signaled completion: kill group and use the provided result
-                    if let Some(child_lock) = child_store.read().await.get(&exec_id).cloned() {
-                        let mut child = child_lock.write().await ;
-                        if let Err(err) = command::kill_process_group(&mut child).await {
-                            tracing::error!("Failed to kill process group after exit signal: {} {}", exec_id, err);
+                // Wait for process to exit, or exit signal from executor
+                tokio::select! {
+                    // Exit signal with result.
+                    // Some coding agent processes do not automatically exit after processing the user request; instead the executor
+                    // signals when processing has finished to gracefully kill the process.
+                    exit_result = &mut exit_signal_future => {
+                        // Executor signaled completion: kill group and use the provided result
+                        if let Some(child_lock) = child_store.read().await.get(&exec_id).cloned() {
+                            let mut child = child_lock.write().await ;
+                            if let Err(err) = command::kill_process_group(&mut child).await {
+                                tracing::error!("Failed to kill process group after exit signal: {} {}", exec_id, err);
+                            }
                         }
-                    }
 
-                    // Map the exit result to appropriate exit status
-                    status_result = Ok(exit_result_status(exit_result));
+                        // Map the exit result to appropriate exit status
+                        Ok(exit_result_status(exit_result))
+                    }
+                    // Process exit
+                    exit_status_result = &mut process_exit_rx => {
+                        exit_status_result.unwrap_or_else(|e| Err(std::io::Error::other(e)))
+                    }
                 }
-                // Process exit
-                exit_status_result = &mut process_exit_rx => {
-                    status_result = exit_status_result.unwrap_or_else(|e| Err(std::io::Error::other(e)));
-                }
-            }
+            };
 
             let (exit_code, status) = match status_result {
                 Ok(exit_status) => {
@@ -1358,6 +1362,16 @@ impl ContainerService for LocalContainerService {
                 "Skipping startup for execution {} because it was stopped before spawn",
                 execution_process.id
             );
+            if let Err(error) = self
+                .spawn_exit_monitor(&execution_process.id, None, true)
+                .await
+            {
+                tracing::error!(
+                    "Terminal cleanup task failed for skipped execution {}: {}",
+                    execution_process.id,
+                    error
+                );
+            }
             return Ok(ExecutionStartOutcome::Skipped(Box::new(
                 current_execution_process,
             )));
@@ -1440,7 +1454,7 @@ impl ContainerService for LocalContainerService {
         }
 
         // Spawn unified exit monitor: watches OS exit and optional executor signal
-        let hn = self.spawn_exit_monitor(&execution_process.id, spawned.exit_signal);
+        let hn = self.spawn_exit_monitor(&execution_process.id, spawned.exit_signal, false);
         self.add_exit_monitor_handle(execution_process.id, hn).await;
 
         Ok(ExecutionStartOutcome::Started)

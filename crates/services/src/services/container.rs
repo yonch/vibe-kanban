@@ -1454,6 +1454,23 @@ pub trait ContainerService {
             return Ok(*current_execution_process);
         }
 
+        // A stop queued behind startup can acquire the execution lock as soon
+        // as `start_execution_inner` returns. Reconcile its persisted result
+        // before setting up consumers for a MsgStore that stop has removed (or
+        // is about to remove). Stop remains responsible for its own cleanup.
+        let current_execution_process =
+            ExecutionProcess::find_by_id(&self.db().pool, execution_process.id)
+                .await?
+                .ok_or_else(|| ContainerError::Other(anyhow!("Execution process not found")))?;
+        let has_msg_store = self
+            .msg_stores()
+            .read()
+            .await
+            .contains_key(&execution_process.id);
+        if should_reconcile_after_start(&current_execution_process.status, has_msg_store) {
+            return Ok(current_execution_process);
+        }
+
         // Start processing normalised logs for executor requests and follow ups
         let workspace_root = self.workspace_to_current_dir(workspace);
         #[cfg_attr(feature = "qa-mode", allow(unused_variables))]
@@ -1547,5 +1564,40 @@ pub trait ContainerService {
 
         tracing::debug!("Started next action: {:?}", next_action);
         Ok(())
+    }
+}
+
+fn should_reconcile_after_start(
+    current_status: &ExecutionProcessStatus,
+    has_msg_store: bool,
+) -> bool {
+    !matches!(current_status, ExecutionProcessStatus::Running) || !has_msg_store
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn started_execution_continues_with_running_status_and_msg_store() {
+        assert!(!should_reconcile_after_start(
+            &ExecutionProcessStatus::Running,
+            true
+        ));
+    }
+
+    #[test]
+    fn started_execution_reconciles_terminal_status_or_missing_msg_store() {
+        for status in [
+            ExecutionProcessStatus::Completed,
+            ExecutionProcessStatus::Failed,
+            ExecutionProcessStatus::Killed,
+        ] {
+            assert!(should_reconcile_after_start(&status, true));
+        }
+        assert!(should_reconcile_after_start(
+            &ExecutionProcessStatus::Running,
+            false
+        ));
     }
 }

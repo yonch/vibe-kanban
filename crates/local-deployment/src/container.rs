@@ -1446,6 +1446,34 @@ impl ContainerService for LocalContainerService {
         Ok(ExecutionStartOutcome::Started)
     }
 
+    async fn finalize_failed_start(
+        &self,
+        execution_process_id: Uuid,
+    ) -> Result<(), ContainerError> {
+        let execution_lock = self.execution_lock(execution_process_id).await;
+        let _execution_guard = execution_lock.lock().await;
+
+        self.msg_stores.write().await.remove(&execution_process_id);
+
+        let current_execution_process =
+            ExecutionProcess::find_by_id(&self.db.pool, execution_process_id).await?;
+        if should_finalize_failed_start(
+            current_execution_process
+                .as_ref()
+                .map(|process| &process.status),
+        ) {
+            self.db
+                .update_execution_completion(
+                    execution_process_id,
+                    ExecutionProcessStatus::Failed,
+                    None,
+                )
+                .await?;
+        }
+
+        Ok(())
+    }
+
     async fn stop_execution(
         &self,
         execution_process: &ExecutionProcess,
@@ -1731,6 +1759,10 @@ fn should_start_execution(current_status: &ExecutionProcessStatus) -> bool {
     matches!(current_status, ExecutionProcessStatus::Running)
 }
 
+fn should_finalize_failed_start(current_status: Option<&ExecutionProcessStatus>) -> bool {
+    matches!(current_status, Some(ExecutionProcessStatus::Running))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1774,5 +1806,20 @@ mod tests {
         ] {
             assert!(!should_start_execution(&status));
         }
+    }
+
+    #[test]
+    fn failed_start_only_updates_running_execution() {
+        assert!(should_finalize_failed_start(Some(
+            &ExecutionProcessStatus::Running
+        )));
+        for status in [
+            ExecutionProcessStatus::Completed,
+            ExecutionProcessStatus::Failed,
+            ExecutionProcessStatus::Killed,
+        ] {
+            assert!(!should_finalize_failed_start(Some(&status)));
+        }
+        assert!(!should_finalize_failed_start(None));
     }
 }

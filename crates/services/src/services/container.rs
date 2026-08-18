@@ -766,6 +766,9 @@ pub trait ContainerService {
         executor_action: &ExecutorAction,
     ) -> Result<ExecutionStartOutcome, ContainerError>;
 
+    async fn finalize_failed_start(&self, execution_process_id: Uuid)
+    -> Result<(), ContainerError>;
+
     async fn stop_execution(
         &self,
         execution_process: &ExecutionProcess,
@@ -1385,22 +1388,9 @@ pub trait ContainerService {
         {
             Ok(start_outcome) => start_outcome,
             Err(start_error) => {
-                self.msg_stores()
-                    .write()
-                    .await
-                    .remove(&execution_process.id);
-                // Mark process as failed
-                if let Err(update_error) = self
-                    .db()
-                    .update_execution_completion(
-                        execution_process.id,
-                        ExecutionProcessStatus::Failed,
-                        None,
-                    )
-                    .await
-                {
+                if let Err(update_error) = self.finalize_failed_start(execution_process.id).await {
                     tracing::error!(
-                        "Failed to mark execution process {} as failed after start error: {}",
+                        "Failed to finalize execution process {} after start error: {}",
                         execution_process.id,
                         update_error
                     );

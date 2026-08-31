@@ -819,7 +819,20 @@ impl Codex {
 
 #[cfg(test)]
 mod tests {
-    use super::{codex_reasoning_options, resolve_model};
+    use super::{Codex, ProtocolReasoningEffort, codex_reasoning_options, resolve_model};
+
+    #[test]
+    fn configured_reasoning_effort_maps_to_protocol_effort() {
+        let codex: Codex = serde_json::from_value(serde_json::json!({
+            "model_reasoning_effort": "xhigh"
+        }))
+        .expect("Codex profile should deserialize");
+
+        assert_eq!(
+            codex.protocol_reasoning_effort(),
+            Some(ProtocolReasoningEffort::XHigh)
+        );
+    }
 
     #[test]
     fn codex_reasoning_options_are_model_specific() {

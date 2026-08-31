@@ -86,6 +86,7 @@ use codex_app_server_protocol::{
     AskForApproval as V2AskForApproval, ReviewTarget, SandboxMode as V2SandboxMode,
     ThreadForkParams, ThreadStartParams, UserInput,
 };
+use codex_protocol::openai_models::ReasoningEffort as ProtocolReasoningEffort;
 use derivative::Derivative;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -502,6 +503,13 @@ impl Codex {
         apply_overrides(builder, &self.cmd)
     }
 
+    fn protocol_reasoning_effort(&self) -> Option<ProtocolReasoningEffort> {
+        self.model_reasoning_effort.as_ref().map(|effort| {
+            ProtocolReasoningEffort::from_str(effort.as_ref())
+                .expect("configured Codex reasoning effort should be valid")
+        })
+    }
+
     fn build_thread_start_params(&self, cwd: &Path) -> ThreadStartParams {
         let sandbox = match self.sandbox.as_ref() {
             None | Some(SandboxMode::Auto) => Some(V2SandboxMode::WorkspaceWrite), // match the Auto preset in codex
@@ -731,6 +739,7 @@ impl Codex {
             (Some(SandboxMode::DangerFullAccess), None)
         );
         let plan_mode = self.plan;
+        let reasoning_effort = self.protocol_reasoning_effort();
         let approvals = self.approvals.clone();
         let repo_context = env.repo_context.clone();
         let commit_reminder = env.commit_reminder;
@@ -747,6 +756,7 @@ impl Codex {
                 approvals,
                 auto_approve,
                 plan_mode,
+                reasoning_effort,
                 repo_context,
                 commit_reminder,
                 commit_reminder_prompt,

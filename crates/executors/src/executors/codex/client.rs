@@ -23,7 +23,10 @@ use codex_app_server_protocol::{
     ToolRequestUserInputQuestion, ToolRequestUserInputResponse, TurnStartParams, TurnStartResponse,
     UserInput,
 };
-use codex_protocol::config_types::{CollaborationMode, ModeKind, Settings};
+use codex_protocol::{
+    config_types::{CollaborationMode, ModeKind, Settings},
+    openai_models::ReasoningEffort,
+};
 use futures::TryFutureExt;
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 use serde_json::{self, Value};
@@ -71,6 +74,7 @@ pub struct AppServerClient {
     pending_feedback: Mutex<VecDeque<String>>,
     auto_approve: bool,
     plan_mode: bool,
+    reasoning_effort: Option<ReasoningEffort>,
     resolved_model: OnceLock<String>,
     pending_plan: Mutex<Option<PendingPlan>>,
     repo_context: RepoContext,
@@ -87,6 +91,7 @@ impl AppServerClient {
         approvals: Option<Arc<dyn ExecutorApprovalService>>,
         auto_approve: bool,
         plan_mode: bool,
+        reasoning_effort: Option<ReasoningEffort>,
         repo_context: RepoContext,
         commit_reminder: bool,
         commit_reminder_prompt: String,
@@ -98,6 +103,7 @@ impl AppServerClient {
             approvals,
             auto_approve,
             plan_mode,
+            reasoning_effort,
             resolved_model: OnceLock::new(),
             pending_plan: Mutex::new(None),
             thread_id: Mutex::new(None),
@@ -198,7 +204,7 @@ impl AppServerClient {
             mode,
             settings: Settings {
                 model,
-                reasoning_effort: None,
+                reasoning_effort: self.reasoning_effort.clone(),
                 developer_instructions: None,
             },
         })
@@ -1065,11 +1071,43 @@ mod tests {
             None,
             false,
             false,
+            None,
             RepoContext::default(),
             false,
             String::new(),
             CancellationToken::new(),
         )
+    }
+
+    #[test]
+    fn collaboration_modes_preserve_selected_reasoning_effort() {
+        let client = AppServerClient::new(
+            LogWriter::new(sink()),
+            None,
+            false,
+            false,
+            Some(ReasoningEffort::XHigh),
+            RepoContext::default(),
+            false,
+            String::new(),
+            CancellationToken::new(),
+        );
+        client.set_resolved_model("gpt-5.6-sol".to_string());
+
+        for mode in [ModeKind::Default, ModeKind::Plan] {
+            let collaboration_mode = client
+                .collaboration_mode(mode)
+                .expect("resolved model should produce a collaboration mode");
+            assert_eq!(
+                collaboration_mode.settings.reasoning_effort,
+                Some(ReasoningEffort::XHigh)
+            );
+            assert_eq!(
+                serde_json::to_value(collaboration_mode)
+                    .expect("collaboration mode should serialize")["settings"]["reasoning_effort"],
+                "xhigh"
+            );
+        }
     }
 
     #[tokio::test]

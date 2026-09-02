@@ -27,15 +27,9 @@ pub enum WorkspaceError {
     BranchNotFound(String),
 }
 
-#[derive(Debug, Clone, Serialize)]
+#[derive(Debug, Clone, FromRow, Serialize)]
 pub struct ContainerInfo {
     pub workspace_id: Uuid,
-}
-
-#[derive(Debug)]
-struct WorkspaceContainerRefRow {
-    id: Uuid,
-    container_ref: String,
 }
 
 #[derive(Debug, Clone, FromRow, Serialize, Deserialize, TS)]
@@ -378,26 +372,23 @@ impl Workspace {
         pool: &SqlitePool,
         path: &str,
     ) -> Result<ContainerInfo, sqlx::Error> {
-        let workspaces = sqlx::query_as!(
-            WorkspaceContainerRefRow,
-            r#"SELECT id as "id!: Uuid",
-                      container_ref as "container_ref!"
+        let normalized = path.trim_end_matches('/');
+        sqlx::query_as::<_, ContainerInfo>(
+            r#"SELECT id as workspace_id
                FROM workspaces
-               WHERE container_ref IS NOT NULL"#,
+               WHERE container_ref IS NOT NULL
+                 AND (container_ref = $1
+                      OR $1 LIKE container_ref || '/%'
+                      OR container_ref LIKE $1 || '/%')
+               ORDER BY length(container_ref) DESC
+               LIMIT 1"#,
         )
-        .fetch_all(pool)
-        .await?;
-
-        Self::best_matching_container_ref(
-            path,
-            workspaces
-                .iter()
-                .map(|ws| (ws.id, ws.container_ref.as_str())),
-        )
-        .map(|workspace_id| ContainerInfo { workspace_id })
-        .ok_or(sqlx::Error::RowNotFound)
+        .bind(normalized)
+        .fetch_one(pool)
+        .await
     }
 
+    #[cfg(test)]
     fn best_matching_container_ref<'a>(
         path: &str,
         candidates: impl Iterator<Item = (Uuid, &'a str)>,

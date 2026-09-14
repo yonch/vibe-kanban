@@ -3,6 +3,7 @@ import { useQuery, keepPreviousData } from '@tanstack/react-query';
 import { useJsonPatchWsStream } from '@/shared/hooks/useJsonPatchWsStream';
 import { workspaceSummaryKeys } from '@/shared/hooks/workspaceSummaryKeys';
 import { makeLocalApiRequest } from '@/shared/lib/localApiTransport';
+import { sortArchivedWorkspacesByArchiveTime } from '@/shared/lib/workspaceSorting';
 import { useHostId } from '@/shared/providers/HostIdProvider';
 import type {
   WorkspaceWithStatus,
@@ -204,18 +205,10 @@ export function useWorkspaces(): UseWorkspacesResult {
 
   const archivedWorkspaces = useMemo(() => {
     if (!archivedData?.workspaces) return [];
-    return Object.values(archivedData.workspaces)
-      .sort((a, b) => {
-        // First sort by pinned (pinned first)
-        if (a.pinned !== b.pinned) {
-          return a.pinned ? -1 : 1;
-        }
-        // Then by created_at (newest first)
-        return (
-          new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        );
-      })
-      .map((ws) => toSidebarWorkspace(ws, archivedSummaries.get(ws.id)));
+    const workspaces = Object.values(archivedData.workspaces).map((ws) =>
+      toSidebarWorkspace(ws, archivedSummaries.get(ws.id))
+    );
+    return sortArchivedWorkspacesByArchiveTime(workspaces);
   }, [archivedData, archivedSummaries]);
 
   // isLoading is true when we haven't received initial data from either stream

@@ -53,6 +53,7 @@ import {
   XIcon,
 } from '@phosphor-icons/react';
 import { useRemoteCloudHostsAppBarModel } from '@/shared/hooks/useRemoteCloudHosts';
+import { sortArchivedWorkspacesByArchiveTime } from '@/shared/lib/workspaceSorting';
 
 export type WorkspaceLayoutMode = 'flat' | 'accordion';
 
@@ -515,8 +516,8 @@ export function WorkspacesSidebarContainer({
   );
 
   const sortedArchivedWorkspaces = useMemo(
-    () => sortWorkspaces(filteredArchivedWorkspaces),
-    [filteredArchivedWorkspaces, sortWorkspaces]
+    () => sortArchivedWorkspacesByArchiveTime(filteredArchivedWorkspaces),
+    [filteredArchivedWorkspaces]
   );
 
   // Apply pagination (only when not searching)

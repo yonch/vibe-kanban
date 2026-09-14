@@ -98,3 +98,6 @@ Caddyfile.dev
 
 .claude/skills
 .claude/scheduled_tasks.lock
+
+# Local Codex runtime state
+.codex-tmp/

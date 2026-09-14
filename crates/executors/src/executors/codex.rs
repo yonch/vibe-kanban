@@ -39,6 +39,7 @@ fn codex_reasoning_options(model: &str) -> Vec<ReasoningOption> {
             ReasoningEffort::High,
             ReasoningEffort::Xhigh,
             ReasoningEffort::Max,
+            ReasoningEffort::Ultra,
         ],
         "gpt-5.6-sol" | "gpt-5.6-terra" => vec![
             ReasoningEffort::None,
@@ -850,7 +851,10 @@ mod tests {
     #[test]
     fn codex_reasoning_options_are_model_specific() {
         let expected_options = [
-            ("gpt-6-astra", vec!["low", "medium", "high", "xhigh", "max"]),
+            (
+                "gpt-6-astra",
+                vec!["low", "medium", "high", "xhigh", "max", "ultra"],
+            ),
             (
                 "gpt-5.6-sol",
                 vec!["none", "low", "medium", "high", "xhigh", "max", "ultra"],

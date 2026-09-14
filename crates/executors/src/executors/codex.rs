@@ -33,6 +33,14 @@ pub(crate) fn resolve_model(model: Option<&str>) -> (Option<&str>, bool) {
 
 fn codex_reasoning_options(model: &str) -> Vec<ReasoningOption> {
     let efforts = match model {
+        "gpt-6-astra" => vec![
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::Xhigh,
+            ReasoningEffort::Max,
+            ReasoningEffort::Ultra,
+        ],
         "gpt-5.6-sol" | "gpt-5.6-terra" => vec![
             ReasoningEffort::None,
             ReasoningEffort::Low,
@@ -354,6 +362,12 @@ impl StandardCodingAgentExecutor for Codex {
         let options = ExecutorDiscoveredOptions {
             model_selector: ModelSelectorConfig {
                 models: vec![
+                    ModelInfo {
+                        id: "gpt-6-astra".to_string(),
+                        name: "GPT-6 Astra".to_string(),
+                        provider_id: None,
+                        reasoning_options: codex_reasoning_options("gpt-6-astra"),
+                    },
                     ModelInfo {
                         id: "gpt-5.6-sol".to_string(),
                         name: "GPT-5.6 Sol".to_string(),
@@ -838,6 +852,10 @@ mod tests {
     fn codex_reasoning_options_are_model_specific() {
         let expected_options = [
             (
+                "gpt-6-astra",
+                vec!["low", "medium", "high", "xhigh", "max", "ultra"],
+            ),
+            (
                 "gpt-5.6-sol",
                 vec!["none", "low", "medium", "high", "xhigh", "max", "ultra"],
             ),
@@ -870,6 +888,10 @@ mod tests {
 
     #[test]
     fn resolve_model_leaves_non_fast_models_unchanged() {
+        assert_eq!(
+            resolve_model(Some("gpt-6-astra")),
+            (Some("gpt-6-astra"), false)
+        );
         assert_eq!(resolve_model(Some("gpt-5.5")), (Some("gpt-5.5"), false));
         assert_eq!(
             resolve_model(Some("gpt-5.4-mini")),

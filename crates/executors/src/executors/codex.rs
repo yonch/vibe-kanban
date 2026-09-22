@@ -33,13 +33,20 @@ pub(crate) fn resolve_model(model: Option<&str>) -> (Option<&str>, bool) {
 
 fn codex_reasoning_options(model: &str) -> Vec<ReasoningOption> {
     let efforts = match model {
-        "gpt-6-astra" => vec![
+        "gpt-6-astra" | "gpt-6-sol" => vec![
             ReasoningEffort::Low,
             ReasoningEffort::Medium,
             ReasoningEffort::High,
             ReasoningEffort::Xhigh,
             ReasoningEffort::Max,
             ReasoningEffort::Ultra,
+        ],
+        "gpt-6-luna" => vec![
+            ReasoningEffort::Low,
+            ReasoningEffort::Medium,
+            ReasoningEffort::High,
+            ReasoningEffort::Xhigh,
+            ReasoningEffort::Max,
         ],
         "gpt-5.6-sol" | "gpt-5.6-terra" => vec![
             ReasoningEffort::None,
@@ -369,6 +376,18 @@ impl StandardCodingAgentExecutor for Codex {
                         reasoning_options: codex_reasoning_options("gpt-6-astra"),
                     },
                     ModelInfo {
+                        id: "gpt-6-sol".to_string(),
+                        name: "GPT-6 Sol".to_string(),
+                        provider_id: None,
+                        reasoning_options: codex_reasoning_options("gpt-6-sol"),
+                    },
+                    ModelInfo {
+                        id: "gpt-6-luna".to_string(),
+                        name: "GPT-6 Luna".to_string(),
+                        provider_id: None,
+                        reasoning_options: codex_reasoning_options("gpt-6-luna"),
+                    },
+                    ModelInfo {
                         id: "gpt-5.6-sol".to_string(),
                         name: "GPT-5.6 Sol".to_string(),
                         provider_id: None,
@@ -397,24 +416,6 @@ impl StandardCodingAgentExecutor for Codex {
                         name: "GPT-5.5 Fast".to_string(),
                         provider_id: None,
                         reasoning_options: codex_reasoning_options("gpt-5.5-fast"),
-                    },
-                    ModelInfo {
-                        id: "gpt-5.4".to_string(),
-                        name: "GPT-5.4".to_string(),
-                        provider_id: None,
-                        reasoning_options: codex_reasoning_options("gpt-5.4"),
-                    },
-                    ModelInfo {
-                        id: "gpt-5.4-fast".to_string(),
-                        name: "GPT-5.4 Fast".to_string(),
-                        provider_id: None,
-                        reasoning_options: codex_reasoning_options("gpt-5.4-fast"),
-                    },
-                    ModelInfo {
-                        id: "gpt-5.4-mini".to_string(),
-                        name: "GPT-5.4 Mini".to_string(),
-                        provider_id: None,
-                        reasoning_options: codex_reasoning_options("gpt-5.4-mini"),
                     },
                     ModelInfo {
                         id: "gpt-5.3-codex".to_string(),
@@ -856,6 +857,11 @@ mod tests {
                 vec!["low", "medium", "high", "xhigh", "max", "ultra"],
             ),
             (
+                "gpt-6-sol",
+                vec!["low", "medium", "high", "xhigh", "max", "ultra"],
+            ),
+            ("gpt-6-luna", vec!["low", "medium", "high", "xhigh", "max"]),
+            (
                 "gpt-5.6-sol",
                 vec!["none", "low", "medium", "high", "xhigh", "max", "ultra"],
             ),
@@ -883,7 +889,6 @@ mod tests {
     #[test]
     fn resolve_model_detects_fast_suffix() {
         assert_eq!(resolve_model(Some("gpt-5.5-fast")), (Some("gpt-5.5"), true));
-        assert_eq!(resolve_model(Some("gpt-5.4-fast")), (Some("gpt-5.4"), true));
     }
 
     #[test]
@@ -892,11 +897,12 @@ mod tests {
             resolve_model(Some("gpt-6-astra")),
             (Some("gpt-6-astra"), false)
         );
-        assert_eq!(resolve_model(Some("gpt-5.5")), (Some("gpt-5.5"), false));
+        assert_eq!(resolve_model(Some("gpt-6-sol")), (Some("gpt-6-sol"), false));
         assert_eq!(
-            resolve_model(Some("gpt-5.4-mini")),
-            (Some("gpt-5.4-mini"), false)
+            resolve_model(Some("gpt-6-luna")),
+            (Some("gpt-6-luna"), false)
         );
+        assert_eq!(resolve_model(Some("gpt-5.5")), (Some("gpt-5.5"), false));
         assert_eq!(resolve_model(None), (None, false));
     }
 }

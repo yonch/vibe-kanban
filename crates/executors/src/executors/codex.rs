@@ -11,8 +11,6 @@ use std::{
     sync::Arc,
 };
 
-const DEFAULT_CODEX_MODEL: &str = "gpt-6.1-sol";
-
 /// Returns the Codex home directory.
 ///
 /// Checks the `CODEX_HOME` environment variable first, then falls back to `~/.codex`.
@@ -449,7 +447,6 @@ impl StandardCodingAgentExecutor for Codex {
                     PermissionPolicy::Supervised,
                     PermissionPolicy::Plan,
                 ],
-                default_model: Some(DEFAULT_CODEX_MODEL.to_string()),
                 ..Default::default()
             },
             slash_commands: vec![
@@ -585,8 +582,7 @@ impl Codex {
             );
         }
 
-        let (model, is_fast) =
-            resolve_model(Some(self.model.as_deref().unwrap_or(DEFAULT_CODEX_MODEL)));
+        let (model, is_fast) = resolve_model(self.model.as_deref());
         let service_tier = if is_fast {
             Some(Some("fast".to_string()))
         } else {
@@ -844,34 +840,7 @@ impl Codex {
 
 #[cfg(test)]
 mod tests {
-    use std::path::Path;
-
     use super::{Codex, ProtocolReasoningEffort, codex_reasoning_options, resolve_model};
-
-    #[test]
-    fn thread_start_uses_sol_6_1_when_profile_has_no_model() {
-        let codex: Codex = serde_json::from_value(serde_json::json!({}))
-            .expect("Codex profile should deserialize");
-        assert_eq!(
-            codex
-                .build_thread_start_params(Path::new("/tmp"))
-                .model
-                .as_deref(),
-            Some("gpt-6.1-sol")
-        );
-
-        let codex: Codex = serde_json::from_value(serde_json::json!({
-            "model": "gpt-6-astra"
-        }))
-        .expect("Codex profile should deserialize");
-        assert_eq!(
-            codex
-                .build_thread_start_params(Path::new("/tmp"))
-                .model
-                .as_deref(),
-            Some("gpt-6-astra")
-        );
-    }
 
     #[test]
     fn configured_reasoning_effort_maps_to_protocol_effort() {

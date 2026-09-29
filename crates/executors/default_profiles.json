@@ -24,7 +24,8 @@
     "CODEX": {
       "DEFAULT": {
         "CODEX": {
-          "sandbox": "danger-full-access"
+          "sandbox": "danger-full-access",
+          "model": "gpt-6.1-sol"
         }
       }
     },

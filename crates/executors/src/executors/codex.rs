@@ -33,7 +33,7 @@ pub(crate) fn resolve_model(model: Option<&str>) -> (Option<&str>, bool) {
 
 fn codex_reasoning_options(model: &str) -> Vec<ReasoningOption> {
     let efforts = match model {
-        "gpt-6-astra" | "gpt-6-sol" => vec![
+        "gpt-6-astra" | "gpt-6.1-sol" | "gpt-6-sol" => vec![
             ReasoningEffort::Low,
             ReasoningEffort::Medium,
             ReasoningEffort::High,
@@ -376,6 +376,12 @@ impl StandardCodingAgentExecutor for Codex {
                         reasoning_options: codex_reasoning_options("gpt-6-astra"),
                     },
                     ModelInfo {
+                        id: "gpt-6.1-sol".to_string(),
+                        name: "GPT-6.1 Sol".to_string(),
+                        provider_id: None,
+                        reasoning_options: codex_reasoning_options("gpt-6.1-sol"),
+                    },
+                    ModelInfo {
                         id: "gpt-6-sol".to_string(),
                         name: "GPT-6 Sol".to_string(),
                         provider_id: None,
@@ -505,7 +511,7 @@ impl StandardCodingAgentExecutor for Codex {
 
 impl Codex {
     pub fn base_command() -> &'static str {
-        "npx -y @openai/codex@0.144.1"
+        "npx -y @openai/codex@0.159.1"
     }
 
     fn build_command_builder(&self) -> Result<CommandBuilder, CommandBuildError> {
@@ -857,6 +863,10 @@ mod tests {
                 vec!["low", "medium", "high", "xhigh", "max", "ultra"],
             ),
             (
+                "gpt-6.1-sol",
+                vec!["low", "medium", "high", "xhigh", "max", "ultra"],
+            ),
+            (
                 "gpt-6-sol",
                 vec!["low", "medium", "high", "xhigh", "max", "ultra"],
             ),
@@ -898,6 +908,10 @@ mod tests {
             (Some("gpt-6-astra"), false)
         );
         assert_eq!(resolve_model(Some("gpt-6-sol")), (Some("gpt-6-sol"), false));
+        assert_eq!(
+            resolve_model(Some("gpt-6.1-sol")),
+            (Some("gpt-6.1-sol"), false)
+        );
         assert_eq!(
             resolve_model(Some("gpt-6-luna")),
             (Some("gpt-6-luna"), false)

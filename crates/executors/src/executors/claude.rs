@@ -279,6 +279,9 @@ fn default_discovered_options() -> crate::executor_discovery::ExecutorDiscovered
         model_selector: ModelSelectorConfig {
             providers: vec![],
             models: [
+                ("claude-fable-5-1", "Fable 5.1"),
+                ("claude-haiku-4-5-20251001", "Haiku 4.5"),
+                ("claude-fable-5", "Fable 5"),
                 ("fable", "Fable"),
                 ("opus", "Opus"),
                 ("opus[1m]", "Opus (1M context)"),

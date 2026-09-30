@@ -3,7 +3,38 @@
     "CLAUDE_CODE": {
       "DEFAULT": {
         "CLAUDE_CODE": {
-          "dangerously_skip_permissions": true
+          "dangerously_skip_permissions": true,
+          "model": "opus",
+          "env": {
+            "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1"
+          }
+        }
+      },
+      "SONNET": {
+        "CLAUDE_CODE": {
+          "dangerously_skip_permissions": true,
+          "model": "sonnet",
+          "env": {
+            "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1"
+          }
+        }
+      },
+      "OPUS": {
+        "CLAUDE_CODE": {
+          "dangerously_skip_permissions": true,
+          "model": "opus",
+          "env": {
+            "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1"
+          }
+        }
+      },
+      "FABLE": {
+        "CLAUDE_CODE": {
+          "dangerously_skip_permissions": true,
+          "model": "fable",
+          "env": {
+            "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1"
+          }
         }
       }
     },

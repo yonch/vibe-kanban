@@ -280,8 +280,6 @@ fn default_discovered_options() -> crate::executor_discovery::ExecutorDiscovered
             providers: vec![],
             models: [
                 ("claude-fable-5-1", "Fable 5.1"),
-                ("claude-opus-5-5", "Opus 5.5"),
-                ("claude-sonnet-5-5", "Sonnet 5.5"),
                 ("claude-haiku-4-5-20251001", "Haiku 4.5"),
                 ("claude-fable-5", "Fable 5"),
                 ("fable", "Fable"),
@@ -302,7 +300,7 @@ fn default_discovered_options() -> crate::executor_discovery::ExecutorDiscovered
                 },
             })
             .collect(),
-            default_model: Some("claude-opus-5-5".to_string()),
+            default_model: Some("opus".to_string()),
             agents: vec![],
             permissions: vec![
                 PermissionPolicy::Auto,

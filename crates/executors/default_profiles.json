@@ -4,25 +4,37 @@
       "DEFAULT": {
         "CLAUDE_CODE": {
           "dangerously_skip_permissions": true,
-          "model": "claude-opus-5-5"
+          "model": "opus",
+          "env": {
+            "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1"
+          }
         }
       },
       "SONNET": {
         "CLAUDE_CODE": {
           "dangerously_skip_permissions": true,
-          "model": "claude-sonnet-5-5"
+          "model": "sonnet",
+          "env": {
+            "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1"
+          }
         }
       },
       "OPUS": {
         "CLAUDE_CODE": {
           "dangerously_skip_permissions": true,
-          "model": "claude-opus-5-5"
+          "model": "opus",
+          "env": {
+            "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1"
+          }
         }
       },
       "FABLE": {
         "CLAUDE_CODE": {
           "dangerously_skip_permissions": true,
-          "model": "claude-fable-5-1"
+          "model": "fable",
+          "env": {
+            "ANTHROPIC_DEFAULT_FABLE_MODEL": "claude-fable-5-1"
+          }
         }
       }
     },
